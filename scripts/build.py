@@ -41,7 +41,7 @@ OUT = ROOT / "docs" / "index.html"
 # -----------------------------------------------------------------------------
 
 def load_json(name):
-    with open(DATA / name) as f:
+    with open(DATA / name, encoding='utf-8') as f:
         return json.load(f)
 
 meta = load_json("metadata.json")
@@ -126,13 +126,18 @@ def process_pitcher_csv(csv_path):
     return starts
 
 pitcher_data = {}
+insufficient_history = []  # pitchers with <4 starts (no ACWR-eligible window)
 for name, m in meta.items():
     csv_path = CSV_DIR / m['csv']
     if not csv_path.exists():
         print(f"WARNING: {csv_path} not found, skipping {name}", file=sys.stderr)
         continue
     pitcher_data[name] = {'starts': process_pitcher_csv(csv_path)}
-    print(f"  processed {name}: {len(pitcher_data[name]['starts'])} starts", file=sys.stderr)
+    n_starts = len(pitcher_data[name]['starts'])
+    print(f"  processed {name}: {n_starts} starts", file=sys.stderr)
+    if n_starts < 4:
+        insufficient_history.append(name)
+        print(f"  WARNING: {name} has only {n_starts} starts — no ACWR-eligible window; excluded from org/age sweet% aggregates", file=sys.stderr)
 
 
 # -----------------------------------------------------------------------------
@@ -196,6 +201,224 @@ asb_data = {name: detect_asb(d['starts']) for name, d in pitcher_data.items()}
 
 
 # -----------------------------------------------------------------------------
+# Short-start detection (lifted from runtime JS for cross-org aggregation)
+# -----------------------------------------------------------------------------
+
+def compute_short_starts(starts):
+    """Detect short unprompted starts: <4 IP AND >=2 IP shorter than previous.
+
+    Mirrors the per-pitcher JS logic at build.py's runtime (renderPitcher) so
+    per-event details line up exactly. Returns a list of events with the
+    pre-short, short, and next-start pitch counts for framing analysis.
+    """
+    out = []
+    for i in range(1, len(starts)):
+        prev = starts[i - 1]
+        cur = starts[i]
+        cur_outs = ip_to_outs(cur['ip'])
+        prev_outs = ip_to_outs(prev['ip'])
+        if cur_outs < 12 and (prev_outs - cur_outs) >= 6:
+            nxt = starts[i + 1] if i + 1 < len(starts) else None
+            out.append({
+                'sDate': cur['d'],
+                'sIp': cur['ip'],
+                'sP': cur['p'],
+                'prevP': prev['p'],
+                'prevIp': prev['ip'],
+                'pctPrev': round(cur['p'] / prev['p'] * 100) if prev['p'] else None,
+                'nDate': nxt['d'] if nxt else None,
+                'nIp': nxt['ip'] if nxt else None,
+                'nP': nxt['p'] if nxt else None,
+                'nRest': nxt['rest'] if nxt else None,
+                'nextPctPrev': round(nxt['p'] / prev['p'] * 100) if (nxt and prev['p']) else None
+            })
+    return out
+
+short_start_data = {name: compute_short_starts(d['starts']) for name, d in pitcher_data.items()}
+
+
+def compute_short_start_aggregates(short_start_data, meta, injuries):
+    """Roll up short-start events by org for cross-org comparison.
+
+    Per-event: pitcher, org, dates, IP/P, % reframing, next-rest, injury flag.
+    Per-org: event count, pitchers involved, median/mean reframe%, skipped-turn
+    count (rough heuristic: next rest >= 10 days).
+    """
+    events = []
+    org_summary = {}
+    for name, evs in short_start_data.items():
+        if not evs:
+            continue
+        m = meta[name]
+        org = m['org']
+        if org not in org_summary:
+            org_summary[org] = {
+                'org': org,
+                'nEvents': 0,
+                'pitchersWithShort': set(),
+                'reframes': [],
+                'skippedTurns': 0,
+                'endOfSeason': 0,
+            }
+        for ev in evs:
+            rest = ev['nRest']
+            # Rough heuristic for skipped turn — documented caveat: for most
+            # orgs normal rest is 5-8 days, so >=10 suggests a skipped rotation
+            # turn. Hand-verified: Harrison (TB) is the only confirmed case in
+            # the dataset.
+            is_skipped = rest is not None and rest >= 10
+            is_eos = ev['nDate'] is None
+            inj = injuries.get(name)
+            events.append({
+                'pitcher': name,
+                'org': org,
+                'yr': m['yr'],
+                'age': m['age'],
+                'ageGroup': m.get('ageGroup', ''),
+                'sDate': ev['sDate'],
+                'sIp': ev['sIp'],
+                'sP': ev['sP'],
+                'prevP': ev['prevP'],
+                'prevIp': ev['prevIp'],
+                'pctPrev': ev['pctPrev'],
+                'nDate': ev['nDate'],
+                'nIp': ev['nIp'],
+                'nP': ev['nP'],
+                'nRest': rest,
+                'nextPctPrev': ev['nextPctPrev'],
+                'skipped': is_skipped,
+                'endOfSeason': is_eos,
+                'injuryLabel': inj['label'] if inj else None,
+                'injurySeverity': inj['severity'] if inj else None,
+            })
+            org_summary[org]['nEvents'] += 1
+            org_summary[org]['pitchersWithShort'].add(name)
+            if ev['nextPctPrev'] is not None:
+                org_summary[org]['reframes'].append(ev['nextPctPrev'])
+            if is_skipped:
+                org_summary[org]['skippedTurns'] += 1
+            if is_eos:
+                org_summary[org]['endOfSeason'] += 1
+
+    orgs_out = []
+    for org, s in org_summary.items():
+        r = s['reframes']
+        median_reframe = None
+        if r:
+            sr = sorted(r)
+            n = len(sr)
+            median_reframe = sr[n // 2] if n % 2 == 1 else round((sr[n // 2 - 1] + sr[n // 2]) / 2)
+        mean_reframe = round(sum(r) / len(r)) if r else None
+        orgs_out.append({
+            'org': org,
+            'nEvents': s['nEvents'],
+            'nPitchers': len(s['pitchersWithShort']),
+            'orgPitcherCount': sum(1 for n, mm in meta.items() if mm['org'] == org and n in pitcher_data),
+            'medianReframe': median_reframe,
+            'meanReframe': mean_reframe,
+            'skippedTurns': s['skippedTurns'],
+            'endOfSeason': s['endOfSeason'],
+        })
+    # Sort by median reframe ascending — lower = more tempered re-entry
+    orgs_out.sort(key=lambda x: (x['medianReframe'] is None, x['medianReframe'] if x['medianReframe'] is not None else 999))
+    events.sort(key=lambda e: (e['org'], e['pitcher'], e['sDate']))
+
+    # Global summary across all events
+    all_reframes = [e['nextPctPrev'] for e in events if e['nextPctPrev'] is not None]
+    all_reframes_sorted = sorted(all_reframes)
+    global_median = None
+    if all_reframes_sorted:
+        n = len(all_reframes_sorted)
+        global_median = all_reframes_sorted[n // 2] if n % 2 == 1 else round((all_reframes_sorted[n // 2 - 1] + all_reframes_sorted[n // 2]) / 2)
+    return {
+        'orgs': orgs_out,
+        'events': events,
+        'totalEvents': len(events),
+        'totalPitchersWithShort': sum(1 for evs in short_start_data.values() if evs),
+        'globalMedianReframe': global_median,
+        'globalMeanReframe': round(sum(all_reframes) / len(all_reframes)) if all_reframes else None,
+        'totalSkipped': sum(1 for e in events if e['skipped']),
+    }
+
+short_start_aggregates = compute_short_start_aggregates(short_start_data, meta, injuries)
+print(f"  short-start events: {short_start_aggregates['totalEvents']} across {short_start_aggregates['totalPitchersWithShort']} pitchers", file=sys.stderr)
+
+
+# -----------------------------------------------------------------------------
+# Age-group auto-computation (replaces hand-maintained numbers in overview_findings.json)
+# -----------------------------------------------------------------------------
+
+def _agg_acwr_py(starts):
+    valid = [s['acwr'] for s in starts if s['acwr'] is not None]
+    if not valid:
+        return {'n': 0, 'mean': 0.0, 'max': 0.0, 'sweet': 0, 'sweetPct': 0.0}
+    mean = sum(valid) / len(valid)
+    mx = max(valid)
+    sweet = sum(1 for x in valid if 0.8 <= x <= 1.3)
+    return {'n': len(valid), 'mean': mean, 'max': mx, 'sweet': sweet, 'sweetPct': 100.0 * sweet / len(valid)}
+
+def compute_age_group_stats(pitcher_data, meta, insufficient_history):
+    """Auto-compute age-group averages from raw CSVs.
+
+    Returns dict keyed by age group label ("18-19" / "20-21" / "22+") with
+    n, pitchers, avg_ip, avg_max_p, avg_sweet_pct, avg_max_acwr. Pitchers
+    with <4 starts (insufficient ACWR history) are excluded from sweet% and
+    max_acwr averages but still counted for n and IP / max P.
+    """
+    groups = {}
+    for name, d in pitcher_data.items():
+        ag = meta[name].get('ageGroup')
+        if not ag:
+            continue
+        groups.setdefault(ag, []).append(name)
+
+    out = {}
+    for label, names in groups.items():
+        ips = []
+        max_ps = []
+        sweets = []
+        max_acwrs = []
+        for name in names:
+            starts = pitcher_data[name]['starts']
+            ips.append(sum(s['ipF'] for s in starts))
+            max_ps.append(max(s['p'] for s in starts) if starts else 0)
+            if name in insufficient_history:
+                continue
+            a = _agg_acwr_py(starts)
+            if a['n'] > 0:
+                sweets.append(a['sweetPct'])
+                max_acwrs.append(a['max'])
+        out[label] = {
+            'n': len(names),
+            'pitchers': sorted(names),
+            'avg_ip': round(sum(ips) / len(ips), 1) if ips else 0,
+            'avg_max_p': round(sum(max_ps) / len(max_ps)) if max_ps else 0,
+            'avg_sweet_pct': round(sum(sweets) / len(sweets)) if sweets else 0,
+            'avg_max_acwr': round(sum(max_acwrs) / len(max_acwrs), 2) if max_acwrs else 0.0,
+        }
+    return out
+
+age_group_stats = compute_age_group_stats(pitcher_data, meta, insufficient_history)
+
+# Override the numeric fields in overview.age_analysis.groups with auto-computed
+# values. Keep the prose (label, takeaway) from JSON; replace the numbers so
+# they never go stale when pitchers are added.
+if 'age_analysis' in overview and 'groups' in overview['age_analysis']:
+    for g in overview['age_analysis']['groups']:
+        label = g.get('label', '')
+        # Accept both "18-19" and "18-19 years old" forms
+        key = label.split(' ')[0]
+        stats = age_group_stats.get(key)
+        if stats:
+            g['n'] = stats['n']
+            g['avg_ip'] = stats['avg_ip']
+            g['avg_max_p'] = stats['avg_max_p']
+            g['avg_sweet_pct'] = stats['avg_sweet_pct']
+            g['avg_max_acwr'] = stats['avg_max_acwr']
+            g['pitchers'] = stats['pitchers']
+
+
+# -----------------------------------------------------------------------------
 # Generate HTML
 # -----------------------------------------------------------------------------
 
@@ -218,6 +441,9 @@ js_payload = {
     'OVERVIEW': overview,
     'BUILD_DATA': build_data,
     'ASB_DATA': asb_data,
+    'SHORT_STARTS': short_start_aggregates,
+    'AGE_GROUP_STATS': age_group_stats,
+    'INSUFFICIENT_HISTORY': insufficient_history,
     'ORG_COLOR': ORG_COLOR,
     'GENERATED': dt.datetime.now().strftime('%B %Y')
 }
@@ -398,6 +624,7 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
   <button data-tab="overview" class="active">Overview</button>
   <button data-tab="pitchers">Pitchers</button>
   <button data-tab="orgs">Organizations</button>
+  <button data-tab="shorts">Short starts</button>
   <button data-tab="best">Best practices</button>
   <button data-tab="ages">Age analysis</button>
   <button data-tab="methodology">Methodology</button>
@@ -406,6 +633,7 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
 <div class="tab-panel active" id="tab-overview"><div id="overview-content"></div></div>
 <div class="tab-panel" id="tab-pitchers"><div class="sub-nav" id="pitcher-subnav"></div><div id="pitcher-detail"></div></div>
 <div class="tab-panel" id="tab-orgs"><div class="sub-nav" id="org-subnav"></div><div id="org-detail"></div></div>
+<div class="tab-panel" id="tab-shorts"><div id="shorts-content"></div></div>
 <div class="tab-panel" id="tab-best"><div id="best-content"></div></div>
 <div class="tab-panel" id="tab-ages"><div id="ages-content"></div></div>
 <div class="tab-panel" id="tab-methodology"><div id="methodology-content"></div></div>
@@ -427,7 +655,7 @@ js_data = "const PAYLOAD = " + json.dumps(js_payload, default=str) + ";"
 
 # Load the runtime JS (separated for readability)
 app_js = r"""
-const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, ORG_COLOR } = PAYLOAD;
+const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR } = PAYLOAD;
 
 // ============================================================================
 // Helpers
@@ -468,7 +696,7 @@ function hexToRgb(hex) {
 // Tab switching + routing
 // ============================================================================
 
-const TABS = ['overview', 'pitchers', 'orgs', 'best', 'ages', 'methodology'];
+const TABS = ['overview', 'pitchers', 'orgs', 'shorts', 'best', 'ages', 'methodology'];
 
 function switchTab(tab) {
   document.querySelectorAll('nav.main-nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -598,14 +826,23 @@ function renderOrgRankings(orgRank) {
   const tierHtml = orgRank.tiers.map(tier => {
     const orgs = tier.orgs.map(o => {
       const color = ORG_COLOR[o.org] || '#888';
-      return `<div class="org-rank-row" onclick="location.hash='orgs/${o.org}'">
+      const isSingleton = o.n <= 1;
+      const isSmall = o.n <= 2;
+      const nColor = isSingleton ? 'var(--danger)' : isSmall ? 'var(--warn)' : 'var(--good)';
+      const nBadge = isSingleton
+        ? `<span class="pill pill-danger" title="Single-pitcher sample — directional only, not a trend.">n=${o.n} · single-pitcher</span>`
+        : isSmall
+          ? `<span class="pill pill-warn" title="Two-pitcher sample — treat as directional, not conclusive.">n=${o.n} · small sample</span>`
+          : `<span class="pill pill-good">n=${o.n}</span>`;
+      const rowOpacity = isSingleton ? 'opacity:0.85;' : '';
+      return `<div class="org-rank-row" style="${rowOpacity}" onclick="location.hash='orgs/${o.org}'">
         <div class="org-rank-badge" style="background:${color};">${o.org}</div>
         <div class="org-rank-main">
+          <div style="margin-bottom:6px;">${nBadge}</div>
           <div class="org-rank-stats">
             <span><strong>${o.sweet}%</strong><small>sweet</small></span>
             <span><strong>${o.max_acwr}</strong><small>max ACWR</small></span>
             <span><strong>${o.avg_ip}</strong><small>avg IP</small></span>
-            <span><strong>n=${o.n}</strong><small>sample</small></span>
           </div>
           <div class="org-rank-note">${o.note}</div>
         </div>
@@ -619,6 +856,7 @@ function renderOrgRankings(orgRank) {
   return `
     <h2 style="margin-top:32px;">${orgRank.title}</h2>
     <p class="lede">${orgRank.intro}</p>
+    <div class="callout callout-info" style="margin-bottom:14px;"><strong>Sample-size reminder:</strong> Most organizations are represented by 1&ndash;3 pitchers. <span class="pill pill-danger">n=1</span> rows reflect a single pitcher and should be read as <em>directional</em>, not as team-wide trends. <span class="pill pill-warn">n=2</span> rows are suggestive. Only when <span class="pill pill-good">n≥3</span> does a pattern start to become a claim.</div>
     <div class="org-rankings-grid">${tierHtml}</div>
   `;
 }
@@ -908,6 +1146,110 @@ function renderAges() {
 }
 
 // ============================================================================
+// Short-start cross-org view
+// ============================================================================
+
+function renderShortStarts() {
+  const S = SHORT_STARTS;
+  if (!S) { document.getElementById('shorts-content').innerHTML = '<p class="lede">Short-start aggregation not available.</p>'; return; }
+
+  // Per-org summary, sorted by median reframe% ascending (lower = more tempered)
+  const orgRows = S.orgs.map(o => {
+    const color = ORG_COLOR[o.org] || '#888';
+    const reframeColor = o.medianReframe === null ? 'var(--text-tertiary)' : o.medianReframe <= 80 ? 'var(--good)' : o.medianReframe <= 100 ? 'var(--info)' : 'var(--warn)';
+    const reframeText = o.medianReframe === null ? '—' : `${o.medianReframe}%`;
+    const coverage = `${o.nPitchers}/${o.orgPitcherCount}`;
+    return `<tr onclick="location.hash='orgs/${o.org}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};font-weight:600;">${o.org}</span></td>
+      <td style="text-align:center;">${o.nEvents}</td>
+      <td style="text-align:center;">${coverage}</td>
+      <td style="text-align:center;color:${reframeColor};font-weight:600;">${reframeText}</td>
+      <td style="text-align:center;">${o.skippedTurns}</td>
+      <td style="text-align:center;">${o.endOfSeason}</td>
+    </tr>`;
+  }).join('');
+
+  // Per-event table — sorted by org, then pitcher, then date
+  const eventRows = S.events.map(e => {
+    const color = ORG_COLOR[e.org] || '#888';
+    const reframeColor = e.nextPctPrev === null ? 'var(--text-tertiary)' : e.nextPctPrev <= 80 ? 'var(--good)' : e.nextPctPrev <= 100 ? 'var(--info)' : 'var(--warn)';
+    const restColor = e.nRest === null ? 'var(--text-tertiary)' : e.nRest >= 10 ? 'var(--danger)' : e.nRest <= 5 ? 'var(--info)' : 'var(--text-muted)';
+    const nextCell = e.endOfSeason
+      ? '<span style="color:var(--text-tertiary);font-style:italic;">end of season</span>'
+      : `${e.nIp} IP · ${e.nP}P <span style="color:${reframeColor};font-weight:600;">${e.nextPctPrev}%</span>`;
+    const restCell = e.nRest === null ? '—' : `<span style="color:${restColor};font-weight:${e.nRest >= 10 ? '600' : '400'};">${e.nRest}d</span>${e.skipped ? ' <span class="pill pill-danger" style="font-size:8px;">skipped</span>' : ''}`;
+    const injBadge = e.injurySeverity
+      ? `<span class="pill ${e.injurySeverity.indexOf('TJ') >= 0 || e.injurySeverity === 'in-season' ? 'pill-danger' : e.injurySeverity === 'nagging-undiagnosed' ? 'pill-warn' : 'pill-neutral'}" style="font-size:8px;" title="${e.injuryLabel}">inj</span>`
+      : '';
+    return `<tr onclick="location.hash='pitchers/${e.pitcher}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};">${e.org}</span></td>
+      <td><strong>${e.pitcher}</strong> ${injBadge}</td>
+      <td>${e.yr}</td>
+      <td>${e.sDate}</td>
+      <td>${e.prevIp} IP · ${e.prevP}P</td>
+      <td style="color:var(--text-muted);">${e.sIp} IP · ${e.sP}P <span style="font-size:10px;color:var(--text-tertiary);">(${e.pctPrev}%)</span></td>
+      <td>${restCell}</td>
+      <td>${nextCell}</td>
+    </tr>`;
+  }).join('');
+
+  // Headline card stats
+  const globalMedian = S.globalMedianReframe === null ? '—' : `${S.globalMedianReframe}%`;
+  const globalMean = S.globalMeanReframe === null ? '—' : `${S.globalMeanReframe}%`;
+
+  document.getElementById('shorts-content').innerHTML = `
+    <h2>How organizations handle unprompted short starts</h2>
+    <p class="lede">
+      A "short" start = less than 4.0 IP <em>and</em> at least 2 full innings shorter than the previous start. This isolates the "chased out of a game" scenario from consistent opener/piggyback roles. The key question: <strong>when a starter gets pulled early, does the org rebuild him or drop him back into a normal workload?</strong>
+    </p>
+    <p class="lede" style="font-size:12.5px;">
+      The framing metric — <strong>next start's pitches as % of the pre-short start's pitches</strong> — answers that question. &lt;80% = tempered re-entry; 80&ndash;100% = matched workload; &gt;100% = increased workload after chased start. Median across the whole dataset: <strong>${globalMedian}</strong> (mean ${globalMean}). ${S.totalEvents} qualifying events across ${S.totalPitchersWithShort} of ${Object.keys(PITCHER_DATA).length} pitchers.
+    </p>
+
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Short-start events</div><div class="stat-value">${S.totalEvents}</div></div>
+      <div class="stat"><div class="stat-label">Pitchers affected</div><div class="stat-value">${S.totalPitchersWithShort}<span class="stat-sub">/${Object.keys(PITCHER_DATA).length}</span></div></div>
+      <div class="stat"><div class="stat-label">Median reframe %</div><div class="stat-value">${globalMedian}</div></div>
+      <div class="stat"><div class="stat-label">Mean reframe %</div><div class="stat-value">${globalMean}</div></div>
+      <div class="stat"><div class="stat-label">Skipped-turn heuristic*</div><div class="stat-value">${S.totalSkipped}</div></div>
+    </div>
+
+    <h3>Per-org summary (sorted by median reframe %, ascending)</h3>
+    <p class="lede" style="font-size:12px;">Lower median reframe = more tempered re-entry. "Coverage" = pitchers with ≥1 short start / total pitchers sampled from that org. Skipped-turn heuristic = next start's rest ≥ 10 days; most orgs normal-rest 5&ndash;8 days so ≥10d implies a skipped rotation slot. End-of-season = the short start was the last outing of the season (no next-start to analyze).</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Org</th><th style="text-align:center;">Events</th><th style="text-align:center;">Coverage</th><th style="text-align:center;">Median reframe %</th><th style="text-align:center;">Skipped*</th><th style="text-align:center;">End-of-season</th></tr></thead>
+      <tbody>${orgRows}</tbody>
+    </table></div>
+    <div class="callout callout-info" style="font-size:11.5px;">
+      <strong>Reading note:</strong> with n=1–3 per org the per-org medians are more a prompt to investigate than a conclusion. The <em>event-level</em> table below is where the real signal lives — sort by pitcher to see each case's story. With only ${S.totalEvents} events across the whole dataset, no single org has enough short starts for the summary to be called a "team philosophy" on its own.
+    </div>
+
+    <h3>All short-start events</h3>
+    <p class="lede" style="font-size:12px;">Click a row to drill into the pitcher. "inj" badge = the pitcher had an injury event that season (not necessarily tied to this specific short start).</p>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Org</th>
+        <th>Pitcher</th>
+        <th>Year</th>
+        <th>Short date</th>
+        <th>Pre-short start</th>
+        <th>Short start (% of prev)</th>
+        <th>Next rest</th>
+        <th>Next start (% of pre-short)</th>
+      </tr></thead>
+      <tbody>${eventRows}</tbody>
+    </table></div>
+
+    <h3>Takeaways (directional — small samples)</h3>
+    <div class="finding"><div class="finding-title">Most orgs re-enter slightly below the pre-short workload, not above it</div><div class="finding-body">Median reframe across the full dataset sits near ${globalMedian}, meaning the typical org cuts the next start's pitch count modestly relative to the pre-short outing. Very few events show &gt;110% — orgs are not pushing pitchers harder after a chased start.</div></div>
+    <div class="finding"><div class="finding-title">Skipped turns are rare but informative</div><div class="finding-body">Only ${S.totalSkipped} of ${S.totalEvents} events have a next-rest ≥ 10 days. These are the explicit "we pulled him from the rotation to regroup" cases; they usually cluster with injury flags or documented role changes (Harrison TB piggyback-to-rotation transition, Cunningham NYY shoulder IL).</div></div>
+    <div class="finding"><div class="finding-title">End-of-season short starts are structurally different</div><div class="finding-body">${S.events.filter(e => e.endOfSeason).length} of the ${S.totalEvents} events were the pitcher's final outing — often a workload-tempering shutdown, not a reactive pull. These have no "next start" to measure and should be read as intentional season close, not chased starts.</div></div>
+
+    <p class="lede" style="font-size:11px;color:var(--text-tertiary);margin-top:20px;">*Skipped-turn is a rest-based heuristic, not a reported roster move. Where the next rest ≥ 10 days we flag it as likely-skipped; Harrison (TB) is the only hand-verified case in the dataset, the rest are probabilistic.</p>
+  `;
+}
+
+// ============================================================================
 // Methodology tab
 // ============================================================================
 
@@ -919,20 +1261,22 @@ function renderMethodology() {
     <h3>ACWR calculation</h3>
     <p>Uncoupled rolling 4-start ACWR, adapted from Gabbett (2016) for starting pitchers on a weekly rotation:</p>
     <div class="kpi-block"><div class="kpi-block-label">formula</div><div class="kpi-block-value">ACWR<sub>i</sub> = P<sub>i</sub> / mean(P<sub>i-3</sub>, P<sub>i-2</sub>, P<sub>i-1</sub>)</div></div>
-    <p>Valid for starts i ≥ 4. Interpretation:</p>
+    <p>Valid for starts i ≥ 4. Pitchers with fewer than 4 starts (i.e. no ACWR-eligible window) are excluded from org/age sweet%-max-ACWR averages; they are still listed in per-pitcher volume counts. Interpretation bounds are inclusive on both ends of each range:</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>Range</th><th>Interpretation</th></tr></thead>
+      <thead><tr><th>Range (inclusive bounds)</th><th>Interpretation</th></tr></thead>
       <tbody>
         <tr><td>&gt; 1.50</td><td>Spike / elevated injury risk zone</td></tr>
-        <tr><td>1.30 - 1.50</td><td>High load — monitor</td></tr>
-        <tr><td>0.80 - 1.30</td><td>Sweet spot — optimal load management</td></tr>
-        <tr><td>0.50 - 0.80</td><td>Undertraining / detraining</td></tr>
+        <tr><td>1.31 – 1.50</td><td>High load — monitor</td></tr>
+        <tr><td>0.80 – 1.30</td><td>Sweet spot — optimal load management</td></tr>
+        <tr><td>0.50 – 0.79</td><td>Undertraining / detraining</td></tr>
         <tr><td>&lt; 0.50</td><td>Rapid deload (typical post-injury or first start back)</td></tr>
       </tbody>
     </table></div>
     <p>Uncoupled (exclude current start from chronic baseline) over coupled because the prior-3-start average better reflects what the pitcher has been accustomed to.</p>
+    <h3>Org rankings — what they are and are not</h3>
+    <p>The org-ranking "sweet %" numbers on the Overview tab are an <strong>unweighted mean</strong> across that org's sampled pitchers. A pitcher with 8 starts weighs the same as a pitcher with 28 starts. This is a deliberate simplicity trade-off given the small per-org samples; <strong>where an org has only one or two pitchers the ranking is directional, not a team-wide claim</strong>. Only NYM (n=2) and ATL (n=3) have multiple full-season samples; most other orgs in the dataset currently sit at n=1 or n=2. Read the ranking as a starting point, then drill into the individual pitcher pages.</p>
     <h3>Short-start definition</h3>
-    <p>A start qualifies as "short" when BOTH: (1) less than 4.0 IP AND (2) at least 2 full innings shorter than the previous start. This excludes consistent short-usage patterns and captures only the "chased from a game he was expected to go deep in" scenario.</p>
+    <p>A start qualifies as "short" when BOTH: (1) less than 4.0 IP AND (2) at least 2 full innings shorter than the previous start. There is no explicit exclusion for pitchers who are consistently short (e.g. piggyback or opener roles); rather, the "≥2 IP shorter than the previous start" guard <em>naturally</em> filters out uniform short-usage because a uniformly short pattern never creates a 2-IP drop against its own baseline. We only flag the "chased from a game he was expected to go deep in" scenario.</p>
     <h3>"% of previous" framing</h3>
     <p>For short-start aftermath, the NEXT start's pitch count is compared to the PRE-SHORT start (the one before the short one). This answers: did the org plan a shorter next outing, or restart normal workload?</p>
     <h3>Age group definitions</h3>
@@ -964,6 +1308,7 @@ function renderMethodology() {
 renderOverview();
 renderPitcherSubnav();
 renderOrgSubnav();
+renderShortStarts();
 renderBest();
 renderAges();
 renderMethodology();
@@ -987,7 +1332,7 @@ html = html.replace('__DATA_INJECTION__', js_data)
 html = html.replace('__APP_JS__', app_js)
 
 OUT.parent.mkdir(parents=True, exist_ok=True)
-with open(OUT, 'w') as f:
+with open(OUT, 'w', encoding='utf-8') as f:
     f.write(html)
 
 print(f"\nBuilt {OUT}", file=sys.stderr)

@@ -25,16 +25,18 @@ Hackenberg (ATL, 129 IP, 91% sweet, 1.17 max ACWR, 3 levels), Ford (SEA, 125 IP,
 - 20–21 (n=7): avg 103 IP, 88 max P, **76% sweet**, 1.54 max ACWR — the messy middle
 - 22+ (n=8): avg 111 IP, 94 max P, **83% sweet**, 1.40 max ACWR — workhorse zone, discipline recovers
 
-**Organization discipline ranking** (avg ACWR sweet% across sampled pitchers):
-- **Cleanest:** NYM 93.3% · ATL 93.0% · CLE/WAS 87.5%
-- **Middle:** MIA 84.4 · LAD 83.8 · CLE 82.1 · NYY 81.7 · SEA 78.9
-- **Most aggressive:** MIL 75.7 · NYY/CHW 73.7 · TB 68.9
+**Organization discipline ranking** (unweighted mean of per-pitcher ACWR sweet%; n=1–3 per org, directional):
+- **Cleanest:** NYM 93.3% (n=2) · ATL 93.0% (n=3) · CLE/WAS 87.5% (n=1)
+- **Middle:** MIA 84.4 (n=2) · LAD 83.8 (n=2) · CLE 82.1 (n=2) · NYY 81.7 (n=2) · SEA 78.9 (n=3)
+- **Most aggressive:** MIL 75.7 (n=3) · NYY/CHW 73.7 (n=1) · TB 68.9 (n=3)
 
-**Invisible injuries remain the unsolved problem:**
-Extended rest gaps (>15 days) correlate with injury more reliably than ACWR spikes. 5 of 6 pitchers with 15+ day gaps had injury issues; only 2 of 5 pitchers with ACWR spikes above 1.5 did (one of those two was a mid-season trade, not an injury). Knoth's January 2025 TJ had ZERO warning signs in his 2024 volume data — scariest case in the dataset.
+With most orgs at n=1–2, these rankings are starting points for investigation, not team-wide trends. Only ATL, MIL, SEA, and TB clear n=3.
 
-**Hard cap patterns cluster clearly by age and org:**
-LAD tightest at 75P ceiling. SEA scales with age (Sloan 72 → Ford 89 → Cijntje 99 at AA). CLE age-calibrated (Doughty 80 → Messick 97). NYY most aggressive at 94–99P for first-pro-season college arms — both Cunningham and Hess had injury flags. TB/ATL aggressive at the young end (Caminiti 93 at 18-19).
+**Invisible injuries remain the unsolved problem — but "rest gap = injury signal" is mostly descriptive, not predictive:**
+Extended rest gaps (>15 days) coincide with reported injuries, but that's largely because the gap IS the IL stint — it's confirmation, not a warning signal. 5 of 6 pitchers with 15+ day gaps had injury issues (Meccage, Meyer, Cunningham, Hess, Nichols); White's 20-day gap was the 2024 Futures Game plus a planned skip. Meanwhile, of 5 pitchers with ACWR spikes above 1.5, only 1 (Nichols) had an injury pattern overlapping the spike — Cijntje's spikes were a piggyback-to-rotation role change, Messick spiked twice and stayed healthy, Ziehl's came in a mid-season trade rebuild, Gill Hill had no formal injury. Knoth's January 2025 TJ had ZERO warning signs in his 2024 volume data — the scariest case in the dataset.
+
+**Hard cap patterns cluster clearly by age and org — within small samples:**
+LAD sits tightest at a ~75P ceiling (Patick, Zazueta), though both are 19-20yo so age-appropriate scaling is confounded with org philosophy (n=2, directional). SEA's caps climb across its 3-pitcher sample (Sloan 72 at 19 Low-A → Ford 89 at 20 Low-A → Cijntje 99 at 21 AA) — age and level are confounded, we can't separate them at n=3. CLE is age-calibrated in the 2-pitcher sample (Doughty 80 at 19, Messick 97 at 23). NYY's two 2024 college draftees (Cunningham, Hess) both ran 94–99P in their first pro season and both had in-season disruptions — a cohort to track in 2026, not yet a proven causal link at n=2. TB was aggressive (87–92P) across its 3 sampled 20-21yo arms. ATL's Caminiti at 93P in 18-19 is one pitcher at that age in that org — directional.
 
 ---
 
@@ -175,13 +177,15 @@ Full methodology is documented inside the deliverable under the **Methodology** 
 ```
 ACWR_i = P_i / mean(P_{i-3}, P_{i-2}, P_{i-1})
 ```
-Sweet spot: 0.8–1.3. Spike: >1.5.
+Sweet spot: 0.8–1.3 (bounds inclusive on both ends). Spike: >1.5. Valid for starts i ≥ 4; pitchers with fewer than 4 starts are excluded from sweet%/max-ACWR aggregates and the build script emits a stderr warning for them.
 
-**Short-start definition:** Less than 4.0 IP AND at least 2 full innings shorter than the previous start. Excludes consistent short-usage patterns.
+**Short-start definition:** Less than 4.0 IP AND at least 2 full innings shorter than the previous start. There is no explicit exclusion for consistent short-usage (openers, piggyback) — the "≥2 IP shorter than previous" guard *naturally* filters most of those cases, since a uniformly short pattern never creates a 2-IP drop against its own baseline.
 
 **% of previous framing:** For short-start aftermath, the NEXT start's pitch count is compared to the PRE-SHORT start. Answers: did the org plan a shorter next outing, or restart normal workload?
 
-**Age groups:** 18–19, 20–21, 22+. Age is as of the season covered by the CSV.
+**Org discipline ranking:** unweighted mean of per-pitcher sweet% across each org's sample. A pitcher with 8 starts weighs the same as a pitcher with 28 starts — a deliberate simplicity trade-off given the small per-org samples. Read with a sample-size qualifier: at n=1–2, the ranking is directional only.
+
+**Age groups:** 18–19, 20–21, 22+. Age is as of the season covered by the CSV. The per-group numbers (avg IP, avg max P, avg sweet%, avg max ACWR) are auto-computed from the CSVs at build time — not hand-maintained — so they always reflect the current dataset.
 
 ---
 
