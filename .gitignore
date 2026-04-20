@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Build artifacts (docs/index.html is committed intentionally so GitHub Pages can serve it)
+# Nothing to ignore here — the CSVs, JSON, script, and docs/ are all part of the repo

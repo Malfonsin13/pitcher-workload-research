@@ -1,0 +1,34 @@
+{
+  "_comment": "Pitcher metadata. The 'csv' field is the filename in data/csvs/. Adding a pitcher = 1) drop CSV in data/csvs/, 2) add an entry here, 3) run scripts/build.py.",
+  "_age_group_definitions": {
+    "18-19": "Prep / young arms in first or second pro season",
+    "20-21": "Mid-development — typically Low-A or High-A",
+    "22+":   "College draftees or advanced prep — typically High-A through AA/AAA"
+  },
+
+  "Birchard":   {"csv":"R__Birchard_-_Pitching_KPIs.csv",   "org":"MIL",     "yr":2025, "age":22, "ageGroup":"22+",   "team":"Wisconsin Timber Rattlers",    "level":"High-A",        "draft":"2023, 5th rd (#155)",  "note":"Already built; full buildout"},
+  "Sloan":      {"csv":"R__Sloan_-_Pitching_KPIs.csv",      "org":"SEA",     "yr":2025, "age":19, "ageGroup":"18-19", "team":"Modesto→Everett",              "level":"Low-A→High-A",  "draft":"2024, 2nd rd (#55)",   "note":"Strict 7-day; 72P cap"},
+  "Santucci":   {"csv":"J__Santucci_-_Pitching_KPIs.csv",   "org":"NYM",     "yr":2025, "age":22, "ageGroup":"22+",   "team":"Brooklyn→Binghamton",          "level":"High-A→AA",     "draft":"2024, 2nd rd (#46)",   "note":"Steady climb, AA promotion"},
+  "Caminiti":   {"csv":"C__Caminiti_-_Pitching_KPIs.csv",   "org":"ATL",     "yr":2025, "age":19, "ageGroup":"18-19", "team":"FCL→Augusta",                  "level":"Rookie→Low-A",  "draft":"2024, 1st rd (#24)",   "note":"Textbook progressive buildup"},
+  "Meccage":    {"csv":"B__Meccage_-_Pitching_KPIs.csv",    "org":"MIL",     "yr":2025, "age":19, "ageGroup":"18-19", "team":"Wilson Warbirds",              "level":"Low-A",         "draft":"2024, 2nd rd (#57)",   "note":"Two DL stints, season-long rehab"},
+  "Harrison":   {"csv":"T__Harrison_-_Pitching_KPIs.csv",   "org":"TB",      "yr":2025, "age":20, "ageGroup":"20-21", "team":"Charleston→Bowling Green",     "level":"Low-A→High-A",  "draft":"2023, 5th rd (#156)",  "note":"Aggressive usage; only skipped turn"},
+  "Doughty":    {"csv":"B__Doughty_-_Pitching_KPIs.csv",    "org":"CLE",     "yr":2025, "age":19, "ageGroup":"18-19", "team":"Lynchburg",                    "level":"Low-A",         "draft":"2024, CB-A (#36)",     "note":"Tightest non-injured leash"},
+  "Ziehl":      {"csv":"G__Ziehl_-_Pitching_KPIs.csv",      "org":"NYY/CHW", "yr":2025, "age":22, "ageGroup":"22+",   "team":"Tampa→Winston-Salem",         "level":"Low-A→High-A",  "draft":"2024, 4th rd (#119)",  "note":"Mid-season trade disrupted rhythm"},
+  "Ford":       {"csv":"W__Ford_-_Pitching_KPIs.csv",       "org":"SEA",     "yr":2025, "age":20, "ageGroup":"20-21", "team":"Modesto Nuts",                "level":"Low-A",         "draft":"2022, 2nd rd (#74)",   "note":"Already built; 7-day rhythm"},
+  "Patick":     {"csv":"S__Patick_-_Pitching_KPIs.csv",     "org":"LAD",     "yr":2025, "age":20, "ageGroup":"20-21", "team":"Rancho→Great Lakes",          "level":"Low-A→High-A",  "draft":"2023, 18th rd (#550)", "note":"Hardest cap — max 75P"},
+  "White":      {"csv":"T__White_-_Pitching_KPIs.csv",      "org":"MIA",     "yr":2024, "age":19, "ageGroup":"18-19", "team":"Jupiter→Beloit",               "level":"Low-A→High-A",  "draft":"2023, CB-A (#35)",     "note":"Cleanest profile in dataset"},
+  "Knoth":      {"csv":"J__Knoth_-_Pitching_KPIs.csv",      "org":"MIL",     "yr":2024, "age":18, "ageGroup":"18-19", "team":"Carolina Mudcats",             "level":"Low-A",         "draft":"2023, CB-A (#33)",     "note":"TJ Jan 2025 — no pitch count warning"},
+  "Cijntje":    {"csv":"J__Cijntje_-_Pitching_KPIs.csv",    "org":"SEA",     "yr":2025, "age":21, "ageGroup":"20-21", "team":"Everett→Arkansas",            "level":"High-A→AA",     "draft":"2024, 1st rd (#15)",   "note":"Switch-pitcher piggyback early; normal rotation from May"},
+  "Zazueta":    {"csv":"C__Zazueta_-_Pitching_KPIs.csv",    "org":"LAD",     "yr":2024, "age":19, "ageGroup":"18-19", "team":"ACL→Rancho",                   "level":"Rookie→Low-A",  "draft":"INT'L 2022 (NYY→LAD)", "note":"2025 MiLPOY at Rancho"},
+  "Meyer":      {"csv":"N__Meyer_-_Pitching_KPIs.csv",      "org":"MIA",     "yr":2024, "age":19, "ageGroup":"18-19", "team":"Jupiter→Beloit",               "level":"Low-A→High-A",  "draft":"2023, 1st rd (#10)",   "note":"Nagging undisclosed injury"},
+  "McLean":     {"csv":"N__McLean_-_Pitching_KPIs.csv",     "org":"NYM",     "yr":2024, "age":22, "ageGroup":"22+",   "team":"Brooklyn→Binghamton",          "level":"High-A→AA",     "draft":"2023, 3rd rd (#91)",   "note":"Made MLB debut 2025"},
+
+  "Cunningham": {"csv":"B__Cunningham_-_Pitching_KPIs.csv", "org":"NYY",     "yr":2025, "age":22, "ageGroup":"22+",   "team":"Hudson Valley",                "level":"High-A",        "draft":"2024, 2nd rd (#53)",   "note":"Shoulder injury mid-season (65+ days missed)"},
+  "Hess":       {"csv":"B__Hess_-_Pitching_KPIs.csv",       "org":"NYY",     "yr":2025, "age":22, "ageGroup":"22+",   "team":"Hudson Valley→Somerset",       "level":"High-A→AA",     "draft":"2024, 1st rd (#26)",   "note":"27-day mid-season gap; injury history"},
+  "Messick":    {"csv":"P__Messick_-_Pitching_KPIs.csv",    "org":"CLE",     "yr":2024, "age":23, "ageGroup":"22+",   "team":"Lake County→Akron",            "level":"High-A→AA",     "draft":"2022, 2nd rd (#54)",   "note":"Workhorse — 138 IP, max 97, MLB debut 2026"},
+  "Clemmey":    {"csv":"A__Clemmey_-_Pitching_KPIs.csv",    "org":"CLE/WAS", "yr":2024, "age":19, "ageGroup":"18-19", "team":"Lynchburg→Fredericksburg",    "level":"Low-A",         "draft":"2023, 2nd rd (#58)",   "note":"Traded to WAS mid-season; 80P hard cap"},
+  "Nichols":    {"csv":"T__Nichols_-_Pitching_KPIs.csv",    "org":"TB",      "yr":2024, "age":21, "ageGroup":"20-21", "team":"Charleston",                  "level":"Low-A",         "draft":"2023, 6th rd (#183)",  "note":"Three IL stints; 'nagging injury' year"},
+  "Gill Hill":  {"csv":"G__Gill_Hill_-_Pitching_KPIs.csv",  "org":"TB",      "yr":2024, "age":21, "ageGroup":"20-21", "team":"Charleston",                  "level":"Low-A",         "draft":"2023, 6th rd (#172)",  "note":"TB workhorse Low-A season — 112 IP"},
+  "Baumann":    {"csv":"G__Baumann_-_Pitching_KPIs.csv",    "org":"ATL",     "yr":2024, "age":20, "ageGroup":"20-21", "team":"Augusta→Rome",                 "level":"Low-A→High-A",  "draft":"2023, 4th rd (#123)",  "note":"Clean season, one compressed rotation stretch"},
+  "Hackenberg": {"csv":"D__Hackenberg_-_Pitching_KPIs.csv", "org":"ATL",     "yr":2024, "age":22, "ageGroup":"22+",   "team":"Rome→Mississippi→Gwinnett",    "level":"High-A→AA→AAA", "draft":"2023, 2nd rd (#59)",   "note":"THREE levels in 2024; 129 IP — ATL exemplar"}
+}

@@ -1,0 +1,49 @@
+{
+  "_comment": "Attribution for unusual rest gaps (>= 8 days) that need explanation. If unknown, leave out.",
+
+  "White":      [{"date":"7/25/24", "detail":"20-day gap driven by 2024 Futures Game selection (July 13, Arlington) plus scheduled rest"}],
+  "Harrison":   [{"date":"7/23/25", "detail":"12-day gap: All-Star Break (+5d) plus probable skipped turn"}],
+  "Ziehl":      [{"date":"7/26/25", "detail":"13-day gap: trade reset — released by NYY affiliate, re-assigned to CHW system"}],
+  "Ford":       [{"date":"7/22/25", "detail":"11-day gap: Cal League All-Star Break (+4d)"}],
+  "Meyer":      [
+    {"date":"6/27/24", "detail":"19-day gap: first undiagnosed injury stint (no formal IL)"},
+    {"date":"7/24/24", "detail":"21-day gap: second undiagnosed injury stint (no formal IL)"}
+  ],
+  "McLean":     [{"date":"8/7/24",  "detail":"12-day gap in Double-A: possible minor issue or planned rest — no formal IL reported"}],
+  "Zazueta":    [{"date":"7/24/24", "detail":"14-day gap: workload tempering per org reports"}],
+  "Cijntje":    [
+    {"date":"6/11/25", "detail":"11-day gap: transition from piggyback role to normal rotation"},
+    {"date":"7/19/25", "detail":"14-day gap: likely All-Star Break plus role consolidation before AA promotion"}
+  ],
+  "Meccage":    [
+    {"date":"5/23/25", "detail":"16-day gap: first DL stint"},
+    {"date":"9/3/25",  "detail":"33-day gap: second DL stint, return with 14P cap"}
+  ],
+
+  "Cunningham": [
+    {"date":"6/4/25",  "detail":"17-day gap between 5/18 and 6/4 — first IL stint 3/31 affected early season; only 1 outing between two extended absences"},
+    {"date":"8/13/25", "detail":"70-day gap: confirmed shoulder IL stint (6/9 → 8/13)"},
+    {"date":"10/7/25", "detail":"34-day gap: Arizona Fall League assignment"}
+  ],
+  "Hess":       [{"date":"6/25/25", "detail":"27-day gap mid-season — no formal IL placement, possibly precautionary rest given injury history"}],
+  "Nichols":    [
+    {"date":"6/29/24", "detail":"25-day gap — first 7-day IL stint (6/20-6/29)"},
+    {"date":"7/21/24", "detail":"22-day gap — second IL stint (7/4-7/21)"},
+    {"date":"8/27/24", "detail":"16-day gap — third IL stint (8/14-8/27)"}
+  ],
+  "Clemmey":    [{"date":"8/3/24",  "detail":"Trade-related transition from Lynchburg (CLE) to Fredericksburg (WAS) on 7/30/24"}],
+  "Hackenberg": [
+    {"date":"4/16/24", "detail":"10-day gap early in 2024 — precautionary or weather-related"},
+    {"date":"7/12/24", "detail":"11-day gap after High-A→AA promotion on 6/25"},
+    {"date":"8/30/24", "detail":"8-day gap after AA→AAA promotion on 8/30"}
+  ],
+  "Baumann":    [
+    {"date":"7/9/24",  "detail":"3-day short rest (compressed rotation) followed by 14-day extended rest after — likely rotation shuffle"},
+    {"date":"7/23/24", "detail":"14-day gap — All-Star Break plus extended rest"},
+    {"date":"8/13/24", "detail":"14-day gap prior to Rome promotion"}
+  ],
+  "Gill Hill":  [
+    {"date":"7/23/24", "detail":"12-day gap covering All-Star Break"},
+    {"date":"8/9/24",  "detail":"10-day gap after short start — possible minor issue"}
+  ]
+}

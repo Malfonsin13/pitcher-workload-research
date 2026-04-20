@@ -1,0 +1,167 @@
+{
+  "_comment": "Top-level overview content. lede = opening paragraph. callouts = 4 boxes. patterns = enumerated findings. best_practices and age_analysis are dedicated sections. Numbers here come from scripts/build.py computations — when you add new pitchers, rerun the build and refresh these narrative fields if conclusions shift.",
+
+  "lede": "Growing research on how MLB organizations manage young starting pitchers. Tracks pitch counts, rest patterns, ACWR-based workload spikes, injury history, and build-up profiles. Currently covers 24 pitchers across 11 organizations spanning 2024-2025 seasons, ages 18-23, from first-year pro debuts through Triple-A promotions. Add pitchers by dropping a TruMedia CSV export in data/csvs/ and appending to metadata.json, then running scripts/build.py.",
+
+  "callouts": [
+    {
+      "tone": "good",
+      "headline": "Four pitchers ran essentially perfect workload management.",
+      "body": "Ford (SEA), White (MIA), Caminiti (ATL), and Santucci (NYM) spent 96-100% of qualifying starts inside the ACWR sweet spot (0.8-1.3). Different orgs, different ages, different build-up paths — all four show what 'by the book' looks like."
+    },
+    {
+      "tone": "info",
+      "headline": "Best-practices innings-eater profile: Hackenberg, Ford, Santucci.",
+      "body": "The three pitchers who covered the most innings with clean ACWR discipline AND stayed healthy: Hackenberg (ATL, 129 IP, 91% sweet, 3 levels), Ford (SEA, 125 IP, 100% sweet), Santucci (NYM, 122 IP, 96% sweet). Messick (CLE, 138 IP) also stayed healthy but carried two ACWR spikes and 1.88 max — high-volume but not 'best practice' ACWR discipline. Hess (NYY, 108 IP, 90% sweet) matched the metrics but still ended up with a 27-day mid-season gap and injury history — a reminder that clean volume data doesn't guarantee a clean season."
+    },
+    {
+      "tone": "warn",
+      "headline": "Age drives ceiling — but 20-21 is the messy middle.",
+      "body": "Max pitch count scales with age: 18-19yo avg max 82P, 20-21yo 88P, 22+ 94P. But ACWR discipline is NOT monotonic — 18-19 averages 85% sweet, 20-21 drops to 76%, then 22+ recovers to 83%. The transition-age group is where orgs push hardest without always adjusting management. Three of the five ACWR-spike pitchers in the dataset sit in the 20-21 group."
+    },
+    {
+      "tone": "danger",
+      "headline": "Invisible injuries are the unsolved problem.",
+      "body": "Knoth's TJ, Meyer's nagging 2024, Nichols's three-IL-stint 2024, Hess's 27-day gap — none were predicted by pitch count or ACWR patterns alone. Extended rest gaps (>15 days) correlate more reliably with injury than ACWR spikes do. Cijntje had 3 ACWR spikes with no injury (role change); Messick had 2 spikes at age 23 and stayed healthy. Volume data is necessary but not sufficient — velocity and mechanics tracking would catch what we can't see here."
+    }
+  ],
+
+  "best_practices": {
+    "title": "What do the healthy innings-eaters have in common?",
+    "intro": "Of the pitchers who covered 95+ IP in a single season, six combined that volume with clean ACWR discipline (≥80% sweet, max ≤1.4, zero spikes) AND stayed healthy: Hackenberg (ATL), Ford (SEA), Santucci (NYM), McLean (NYM), Baumann (ATL), and White (MIA). What do they share?",
+    "items": [
+      {
+        "title": "Consistent weekly rhythm",
+        "body": "All six held 6-7 day rest windows 85%+ of the time. No wild compression, no unexplained extensions. Rotation integrity is a shared feature of the healthy-and-productive group. Ford's 7-day rhythm is the strictest in the dataset (20 of 22 rest gaps at exactly 7 days)."
+      },
+      {
+        "title": "Progressive cap expansion tied to promotions, not plateaus",
+        "body": "Hackenberg opened at 70P and ended at 97P across three levels. Ford opened at 75P and ended at 89P. Santucci opened at 66P and ended at 81P. Caps climbed 15-25P over the season in staircase fashion, each step tied to a level promotion — not in one aggressive jump and not stuck at a plateau."
+      },
+      {
+        "title": "Promoted when the data said so",
+        "body": "Each earned at least one promotion during the season. Hackenberg cleared three levels. Performance AT a level dictated the move up. None were held back artificially; none were rushed before the workload profile was right."
+      },
+      {
+        "title": "ACWR max under 1.4, zero spikes above 1.5",
+        "body": "Hackenberg 1.17, Ford 1.19, Santucci 1.29, McLean 1.28, Baumann 1.35, White 1.12. None of the six exceeded 1.4 max ACWR. Contrast with Messick (CLE workhorse, 138 IP) at 1.88 max with 2 spikes — he stayed healthy, but that's distinct from clean management. Messick's volume was the result, not the method."
+      },
+      {
+        "title": "No unexplained mid-season gaps",
+        "body": "Every gap above 10 days in this group was tied to a level promotion (8-11 days typical) or the All-Star break extension. No 'load management' breaks. No short-IL visits. The healthy workhorses show uninterrupted rotation presence — when a gap appears in this dataset without a promotion or ASB explanation, it's almost always injury."
+      },
+      {
+        "title": "College draftees and older prep arms dominate the list",
+        "body": "Five of the six clean innings-eaters are 20+ years old. The lone 19yo is White (MIA) — who opened 2024 already capped near 75P thanks to his 2023 CB-A arm development. Physical maturity helps absorb volume without ACWR distortion. The 18-19 group can run clean (85% sweet on average) but doesn't carry enough total IP to enter this category."
+      }
+    ]
+  },
+
+  "age_analysis": {
+    "title": "Age group patterns",
+    "intro": "Across 24 pitchers, age is the single biggest predictor of workload ceiling. Organization matters for rhythm discipline and short-start handling, but the pitch count cap scales with age more strongly than with org or level. The surprise: ACWR discipline is NOT monotonic with age — it dips at 20-21 and recovers at 22+.",
+    "groups": [
+      {
+        "label": "18-19 years old",
+        "n": 9,
+        "avg_ip": 81.4,
+        "avg_max_p": 82,
+        "avg_sweet_pct": 85,
+        "avg_max_acwr": 1.33,
+        "pitchers": ["Caminiti", "Clemmey", "Doughty", "Knoth", "Meccage", "Meyer", "Sloan", "White", "Zazueta"],
+        "takeaway": "Tight caps (72-86P range). Low inning counts (avg 81 IP) — most pitchers top out around 70-100 innings. High ACWR discipline (85% sweet, zero spikes above 1.5 in the entire group). Clemmey and Doughty both capped hard at 80P. This is the 'protect the young arm' zone where orgs are most conservative and most uniform."
+      },
+      {
+        "label": "20-21 years old",
+        "n": 7,
+        "avg_ip": 102.6,
+        "avg_max_p": 88,
+        "avg_sweet_pct": 76,
+        "avg_max_acwr": 1.54,
+        "pitchers": ["Baumann", "Cijntje", "Ford", "Gill Hill", "Harrison", "Nichols", "Patick"],
+        "takeaway": "The messy middle. Workload expands (avg 103 IP) and caps climb (88P avg), but ACWR discipline drops to 76%, max ACWR jumps to 1.54. Three of the five pitchers in the dataset with ACWR spikes above 1.5 sit here (Cijntje 2.08, Gill Hill 1.77, Nichols 1.66). This is the group where orgs test durability — sometimes with injury consequences (Nichols had three IL stints). Ford and Patick are the exceptions — both ran clean seasons inside their age-appropriate caps."
+      },
+      {
+        "label": "22+ years old",
+        "n": 8,
+        "avg_ip": 111.2,
+        "avg_max_p": 94,
+        "avg_sweet_pct": 83,
+        "avg_max_acwr": 1.40,
+        "pitchers": ["Birchard", "Cunningham", "Hackenberg", "Hess", "McLean", "Messick", "Santucci", "Ziehl"],
+        "takeaway": "Workhorse zone. Avg 111 IP, 94P max — teams deploy them like legitimate starter prospects. ACWR discipline recovers to 83% as orgs have more confidence in the arm's durability. Three of the four highest-IP pitchers in the dataset sit here (Messick 138, Hackenberg 129, Santucci 122). But not everyone in this group is clean: Cunningham ran 94P max and ended up on shoulder IL; Hess ran 99P max and had a 27-day gap with prior injury history."
+      }
+    ],
+    "conclusions": [
+      "Pitch count ceiling is primarily age-gated, not level-gated. Clemmey at 19 in Low-A capped at 80P; Messick at 23 in AA pushed to 97P. Same CLE organization (pre-trade for Clemmey), different ages, 17P cap difference.",
+      "ACWR discipline follows a U-shape with age, not a line. Tightest at 18-19 (85% sweet) and 22+ (83%), loosest at 20-21 (76%). The middle years are where orgs test the arm's ability to absorb spikes — sometimes intentionally, sometimes as a byproduct of promotion-era workload expansion.",
+      "Health-disruption cases correlate with pushing at or above age-appropriate ceiling. Cunningham (22yo) was hitting 92P+ regularly before his shoulder IL; Meyer (19yo) was at 79-85P right before the nagging issues began; Nichols (21yo) was at 82-87P across short-rest stretches before his first IL stint.",
+      "The healthiest high-volume seasons (Hackenberg, Ford, Santucci, McLean, Baumann, White) stayed INSIDE age-appropriate caps while accumulating total IP through frequency and rhythm integrity — not per-start overload.",
+      "Extended rest gaps (>15 days) are a more reliable injury signal than ACWR spikes. 6 of 7 pitchers with gaps over 15 days had reported or inferred injury issues; Cijntje's 3 ACWR spikes came from a role change (piggyback to starter) with no injury."
+    ]
+  },
+
+  "org_rankings": {
+    "title": "Organization discipline rankings",
+    "intro": "Average ACWR sweet% across each org's sampled pitchers. Higher = more consistent in-season workload management. Small samples (1-3 pitchers per org) — directional, not definitive.",
+    "tiers": [
+      {
+        "tier": "Cleanest (sweet% ≥ 85%)",
+        "orgs": [
+          {"org": "NYM", "n": 2, "sweet": 93.3, "max_acwr": 1.29, "avg_ip": 116.0, "note": "Both Santucci and McLean ran clean high-volume seasons with AA promotions. Cleanest 2-pitcher sample."},
+          {"org": "ATL", "n": 3, "sweet": 93.0, "max_acwr": 1.27, "avg_ip": 99.3, "note": "Three pitchers, all clean. Hackenberg's 3-level year is the exemplar. Best 3-pitcher sample."},
+          {"org": "CLE/WAS", "n": 1, "sweet": 87.5, "max_acwr": 1.39, "avg_ip": 100.3, "note": "Clemmey maintained 80P cap and clean ACWR across both orgs post-trade."}
+        ]
+      },
+      {
+        "tier": "Middle tier (sweet% 78-85%)",
+        "orgs": [
+          {"org": "MIA", "n": 2, "sweet": 84.4, "max_acwr": 1.27, "avg_ip": 85.0, "note": "Dramatic intra-org split: White (100% sweet, zero issues) vs Meyer (nagging 2024 injury)."},
+          {"org": "LAD", "n": 2, "sweet": 83.8, "max_acwr": 1.36, "avg_ip": 81.7, "note": "Tightest caps in the dataset (75P ceiling for both pitchers). Low total IP."},
+          {"org": "CLE", "n": 2, "sweet": 82.1, "max_acwr": 1.62, "avg_ip": 111.8, "note": "Age-calibrated protocol: Doughty (19) tight, Messick (23) workhorse. Messick's ACWR spikes drag the avg."},
+          {"org": "NYY", "n": 2, "sweet": 81.7, "max_acwr": 1.29, "avg_ip": 89.8, "note": "Clean ACWR metrics but BOTH pitchers had injury flags (Cunningham shoulder IL, Hess 27-day gap). Aggressive 94-99P ceiling for first-year pros."},
+          {"org": "SEA", "n": 3, "sweet": 78.9, "max_acwr": 1.55, "avg_ip": 105.2, "note": "Cijntje's switch-pitcher piggyback role drags the org avg. Ford's season is dataset-cleanest. Age-scaled caps."}
+        ]
+      },
+      {
+        "tier": "Most aggressive (sweet% < 78%)",
+        "orgs": [
+          {"org": "MIL", "n": 3, "sweet": 75.7, "max_acwr": 1.34, "avg_ip": 85.8, "note": "Knoth's clean numbers preceded TJ — the alarming 'no warning' case. Meccage injury-disrupted."},
+          {"org": "NYY/CHW", "n": 1, "sweet": 73.7, "max_acwr": 1.63, "avg_ip": 107.0, "note": "Ziehl single-sample — 3 ACWR spikes in the post-trade rebuild phase. Mid-season trade workload discontinuity."},
+          {"org": "TB", "n": 3, "sweet": 68.9, "max_acwr": 1.59, "avg_ip": 97.8, "note": "Lowest sweet%. Aggressive caps (87-92P at 20-21yo). Nichols injury-disrupted. Gill Hill one ACWR spike. Harrison is the only confirmed skipped-turn case in dataset."}
+        ]
+      }
+    ]
+  },
+
+  "key_patterns": [
+    {
+      "title": "Short start bounce-backs are normal, not punished",
+      "body": "When a pitcher gets chased before 4 IP, the next start almost always comes back at 85-105% of the PRE-short-start pitch count — not the short start count. Orgs send them out with their normal workload expectation. Only one pitcher in the 24-pitcher dataset (Harrison, TB) has a confirmed skipped turn after a short start."
+    },
+    {
+      "title": "Organization hard cap styles cluster clearly",
+      "body": "LAD tightest (75P max for Patick and Zazueta). CLE/WAS 80P ceiling for Clemmey across both orgs. CLE operates age-calibrated: Doughty 80P, Messick 97P. SEA scales by age (Sloan 72, Ford 89, Cijntje 99 at AA). MIL scales by level (82-85 at Low-A, 92 at High-A). NYY most aggressive at 94-99P for 22yo college draftees. TB/ATL aggressive at the young end (Caminiti 93 at 18-19, Harrison/Gill Hill 92 at 20-21)."
+    },
+    {
+      "title": "Multi-level promotions happen cleanly when data supports it",
+      "body": "Hackenberg (ATL 2024) went Rome → Mississippi → Gwinnett — three levels in one season, 129 IP, no injury. Messick (CLE 2024) and Hess (NYY 2025) both went High-A → AA. McLean (NYM 2024) and Santucci (NYM 2025) both climbed High-A → AA with clean performance. Each transition handled with an 8-11 day gap."
+    },
+    {
+      "title": "Invisible injury signatures — watch for these patterns",
+      "body": "Four cases in this dataset show 'pushing through an undiagnosed issue' signatures that wouldn't trigger ACWR alarms. (1) Meyer (MIA 2024): two 19-21 day gaps without formal IL placement, return outings were short. (2) Nichols (TB 2024): three separate IL stints with low-volume outings in between — season capped at 71 IP. (3) Knoth (MIL 2024): completely clean workload pattern followed by offseason TJ — the scariest case, no visible signal. (4) Hess (NYY 2025): 27-day mid-season gap with injury history prior to the draft, ACWR looked fine throughout."
+    },
+    {
+      "title": "Aggressive first-year deployment has consequences",
+      "body": "Cunningham (NYY 2025, 22yo college draftee) pushed to 92P+ in 5 of 7 pre-injury starts, then missed 65+ days with shoulder. Knoth (MIL 2024, 18yo prep) had his chronic workload build above baseline in the weeks before his elbow shutdown. Hess (NYY 2025, 22yo college draftee) ran 99P max in first pro season with 27-day mid-season gap. Small sample but the pattern: first-pro-season volume aggression correlates with in-season disruption more often than veteran management."
+    },
+    {
+      "title": "Extended rest gaps beat ACWR spikes as injury signal",
+      "body": "Of 6 pitchers in the dataset with a rest gap above 15 days, 5 had reported or inferred injury issues (Meccage, Meyer, Cunningham, Hess, Nichols). The one exception (White) had a 20-day gap that spans the All-Star break + one planned skip — clean explanation. Meanwhile, of 5 pitchers with ACWR spikes above 1.5, only 2 had injury issues (Nichols, Ziehl — and Ziehl's was trade-related, not injury). ACWR spikes are noisy; extended gaps are loud. Watch the calendar."
+    },
+    {
+      "title": "All-Star break response splits into two patterns",
+      "body": "Minimal-disruption crowd (+2-3 days): Santucci, Meccage, Patick, Sloan, Birchard — shifted rotation and came back quickly. Extended-rest crowd (+4-5 days): Ford, Caminiti, Doughty, Harrison, White — got a real week off. Inverse correlation with post-break quality: the shorter the break, the worse the comeback start. Ford (+4d) → 88P breakout; Santucci (+2d) → 1.2 IP disaster."
+    }
+  ]
+}
