@@ -1,0 +1,2737 @@
+  # ────────────────────────────── SET-UP ──────────────────────────────
+!pip -q install ipywidgets
+from IPython.display import display, clear_output
+import ipywidgets as wg
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import datetime
+import matplotlib.dates as mdates
+from matplotlib.colors import Normalize, TwoSlopeNorm
+from matplotlib.cm import get_cmap
+
+import warnings
+warnings.filterwarnings("ignore", message=".*Downcasting object dtype arrays on .fillna.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# --- global date formatters ---------------------------------------
+LOCATOR   = mdates.DayLocator(interval=2)
+FORMATTER = mdates.DateFormatter('%m-%d')
+FIGSIZE = (10, 5)
+
+import matplotlib.pyplot as plt
+plt.rcParams['figure.figsize'] = FIGSIZE
+
+# ——  “RdBu” colormap (white midpoint)  ——
+from matplotlib import cm
+bwr_custom = cm.get_cmap('RdBu_r')   # keep the same variable name so the rest of the code works unchanged
+
+# Exponent for per-throw intent weighting (e.g. 2.0 for v²)
+expo = 2.0
+
+# ──────────────────────────────────────────────────────────────────
+#  LOAD CSVs (Colab upload or local)
+# ──────────────────────────────────────────────────────────────────
+try:
+    from google.colab import files
+    print("Please upload PULSE RAW DATA CSV, then PULSE WL DATA CSV")
+    uploaded = files.upload()
+    raw_file = [f for f in uploaded if 'RAW' in f.upper()][0]
+    wl_file  = [f for f in uploaded if 'WL'  in f.upper()][0]
+
+    # Separate upload call for the WISC file
+    print("Now upload WISC Pitcher Pulse CSV")
+    uploaded_wisc = files.upload()
+    pulse_file = [f for f in uploaded_wisc if 'PULSE' in f.upper() and 'WISC' in f.upper()][0]
+
+except ImportError:
+    raw_file = 'PULSE RAW DATA.csv'
+    wl_file  = 'PULSE WL DATA.csv'
+    pulse_file = 'WISC Pitcher Pulse.csv'
+
+df_raw   = pd.read_csv(raw_file)
+df_wl    = pd.read_csv(wl_file)
+df_pulse = pd.read_csv(pulse_file)
+
+# Proceed with reading the pulse file
+df_pulse['DATE_TIME'] = pd.to_datetime(df_pulse['DATE_TIME'])
+df_pulse['date_corr'] = np.where(
+    df_pulse['DATE_TIME'].dt.hour < 4,
+    (df_pulse['DATE_TIME'] - pd.Timedelta(days=1)).dt.date,
+    df_pulse['DATE_TIME'].dt.date
+)
+df_pulse['armSpeed'] = df_pulse['VELOCITY']
+df_pulse['converted_name'] = df_pulse['BREWERS_PITCHER'].apply(
+    lambda x: ' '.join(x.split(', ')[::-1])
+)
+
+# —— Build the Work-Load (WL) dataframe ————————————————
+df_wl['date']    = pd.to_datetime(df_wl['date']).dt.date
+df_wl['pitcher'] = df_wl['firstName'] + ' ' + df_wl['lastName']
+wl_df = df_wl[['pitcher', 'date', 'Total Throw Count']].rename(
+    columns={'Total Throw Count': 'wl_total_throws'}
+)
+
+# —— Preprocess dates & pitcher names ————————————————
+df_raw['datetime'] = pd.to_datetime(df_raw['datetime'])
+df_raw['date_corr'] = np.where(
+    df_raw['datetime'].dt.hour < 4,
+    (df_raw['datetime'] - pd.Timedelta(days=1)).dt.date,
+    df_raw['datetime'].dt.date
+)
+df_raw['pitcher'] = df_raw['firstName'] + ' ' + df_raw['lastName']
+
+
+
+# ------------------------------------------------------------------
+# 1) WINSORISE (clip) arm-speed at 97.5 % → armSpeed_cap
+# ------------------------------------------------------------------
+def winsorise_top(series, q=0.975):
+    upper = np.nanpercentile(series, q*100)
+    return series.clip(upper=upper)
+
+df_raw['armSpeed_cap'] = df_raw.groupby('pitcher')['armSpeed'].transform(winsorise_top)
+
+# NEW – trim armSlot / shoulderRotation outliers BEFORE df_clean
+for col in ['armSlot', 'shoulderRotation']:
+    lo, hi = np.nanpercentile(df_raw[col].dropna(), [1, 99])
+    df_raw[col] = df_raw[col].clip(lo, hi)
+
+# ────────────────────────────────────────────────────────────────
+# 2) Recent-10-day percentile dictionaries (per pitcher) ————
+# ────────────────────────────────────────────────────────────────
+latest_by = df_raw.groupby('pitcher')['date_corr'].max()
+
+def recent_subset(grp, days=10):
+    latest = latest_by.loc[grp.name]
+    cutoff = latest - pd.Timedelta(days=days-1)
+    return grp.loc[grp['date_corr'] >= cutoff]
+
+def recent_pct(p):
+    def _func(grp):
+        rec = recent_subset(grp)
+        if rec['armSpeed_cap'].notna().sum() >= 25:
+            return np.nanpercentile(rec['armSpeed_cap'], p)
+        return np.nanpercentile(grp['armSpeed_cap'], p)
+    return _func
+
+pct50_by = (
+    df_raw.groupby('pitcher', group_keys=False)
+          .apply(recent_pct(50), include_groups=True)
+          .to_dict()
+)
+pct75_by = (
+    df_raw.groupby('pitcher', group_keys=False)
+          .apply(recent_pct(75), include_groups=True)
+          .to_dict()
+)
+pct80_by = (
+    df_raw.groupby('pitcher', group_keys=False)
+          .apply(recent_pct(80), include_groups=True)
+          .to_dict()
+)
+pct85_by = (
+    df_raw.groupby('pitcher', group_keys=False)
+          .apply(recent_pct(85), include_groups=True)
+          .to_dict()
+)
+pct90_by = (
+    df_raw.groupby('pitcher', group_keys=False)
+          .apply(recent_pct(90), include_groups=True)
+          .to_dict()
+)
+
+# ────────────────────────────────────────────────────────────────
+# 3) Torque→Speed interpolation (per pitcher) —————————————
+# ────────────────────────────────────────────────────────────────
+RECENT_DAYS = 10
+BIN, MIN_THROWS = 3, 10
+torque_interp = {}
+
+tmp = df_raw.dropna(subset=['armSpeed','torque']).copy()
+tmp['t_bin'] = (tmp['torque'] / BIN).round() * BIN
+summary = (
+    tmp.groupby(['pitcher','t_bin'])
+       .agg(n=('armSpeed','size'), spd=('armSpeed','mean'))
+       .reset_index()
+)
+for p, g in summary.groupby('pitcher'):
+    g2 = g[g['n'] >= MIN_THROWS].sort_values('t_bin')
+    if len(g2) >= 2:
+        torque_interp[p] = {'t': g2['t_bin'].values, 's': g2['spd'].values}
+
+def interp_speed(pitcher, torque):
+    d = torque_interp.get(pitcher)
+    if d is None: return np.nan
+    return float(np.interp(torque, d['t'], d['s'], left=d['s'][0], right=d['s'][-1]))
+
+# ────────────────────────────────────────────────────────────────
+# 4) Impute missing armSpeed → armSpeed_imp —————————————
+#    • Game → 90th pct, Bullpen → 85th pct, then torque, then median
+# ────────────────────────────────────────────────────────────────
+def impute_speed(row):
+    if not np.isnan(row['armSpeed']):
+        return row['armSpeed']
+    p   = row['pitcher']
+    tag = row['tag'] if isinstance(row['tag'], str) else ''
+    if 'Game' in tag:
+        return pct90_by.get(p, np.nan)
+    if 'Bullpen' in tag:
+        return pct85_by.get(p, np.nan)
+
+    # 1) try torque interpolation
+    t = row.get('torque')
+    if not np.isnan(t):
+        val = interp_speed(p, t)
+        if not np.isnan(val):
+            return val
+
+    # 2) fallback → median armSpeed over last RECENT_DAYS for this pitcher
+    grp    = df_raw[df_raw['pitcher'] == p]
+    latest = latest_by[p]
+    cutoff = latest - pd.Timedelta(days=RECENT_DAYS-1)
+    med    = grp.loc[grp['date_corr'] >= cutoff, 'armSpeed'].median()
+
+    # 3) final fallback → global mean
+    return float(med) if pd.notna(med) else df_raw['armSpeed'].mean()
+
+df_raw['armSpeed_imp'] = df_raw.apply(impute_speed, axis=1)
+
+# ────────────────────────────────────────────────
+# Intent-weight  (now that armSpeed_imp exists)
+# ────────────────────────────────────────────────
+p50_map = df_raw['pitcher'].map(pct50_by)
+ratio   = df_raw['armSpeed_imp'] / p50_map
+df_raw['intent_weight'] = np.where(
+    ratio <= 1.0,
+    ratio,          # linear below 50th
+    ratio ** expo   # exponential above 50th
+)
+
+df_clean = df_raw.dropna(subset=['armSpeed_imp','date_corr']).copy()
+
+df_raw['intent_load'] = df_raw.apply(
+    lambda r: ((r['armSpeed_imp'] / pct50_by[r['pitcher']]) ** expo)
+              if r['armSpeed_imp'] >= pct50_by[r['pitcher']] else 0,
+    axis=1
+)
+
+# ────────────────────────────────────────────────────────────────
+# 5) Velocity Decay, Average and Max Calculations
+# ────────────────────────────────────────────────────────────────
+def plot_absolute_velocity_decay(df_pulse, pitcher):
+    subset = df_pulse[
+        (df_pulse['converted_name'] == pitcher) &
+        (df_pulse['COUNT'].notna()) & (df_pulse['COUNT'] != '')
+    ]
+    if subset.empty:
+        print(f'No in-game data for {pitcher}')
+        return
+
+    fastball_pool = {'FA', 'SI', 'FC'}
+    avail = fastball_pool & set(subset['PITCH_TYPE'].unique())
+    if not avail:
+        print(f'No fastball data for {pitcher}')
+        return
+    if 'FA' in avail:
+        keep = {'FA', 'SI'} if 'SI' in avail else {'FA'}
+    else:
+        keep = {'SI'} if 'SI' in avail else {'FC'}
+
+    fb = subset[subset['PITCH_TYPE'].isin(keep)]
+    if fb.empty:
+        print(f'No qualifying fastball data for {pitcher}')
+        return
+
+    # 1) Build historical & last-10 sessions
+    curves = []
+    for d, g in fb.groupby('date_corr'):
+        valid = g[g['armSpeed'].notna()].sort_values('DATE_TIME')
+        if not valid.empty:
+            curves.append(valid['armSpeed'].reset_index(drop=True))
+    if not curves:
+        print(f'No qualifying fastball data for {pitcher}')
+        return
+
+    mat    = pd.concat(curves, axis=1).ffill().bfill()
+    last_n = min(10, mat.shape[1])
+    mat10  = mat.iloc[:, -last_n:]
+
+    mean   = mat.mean(axis=1)
+    q1, q3 = mat.quantile(0.25, axis=1), mat.quantile(0.75, axis=1)
+    m10    = mat10.mean(axis=1)
+    q1_10, q3_10 = mat10.quantile(0.25, axis=1), mat10.quantile(0.75, axis=1)
+
+    # 2) Extract last-game session
+    last_date = fb['date_corr'].max()
+    g_last = fb[fb['date_corr'] == last_date].sort_values('DATE_TIME')
+    if not g_last.empty:
+        last_curve = g_last['armSpeed'].reset_index(drop=True)
+        idx_last   = np.arange(1, len(last_curve) + 1)
+    else:
+        last_curve = None
+
+    # 3) Plot
+    idx = np.arange(1, len(mean) + 1)
+    fig, ax = plt.subplots()
+
+    # historical mean ± IQR
+    ax.plot(idx, mean,  'k-', lw=2, label='Mean (hist)')
+    ax.fill_between(idx, q1, q3, alpha=0.3, label='IQR (hist)')
+
+    # last-10 mean ± IQR
+    ax.plot(idx, m10,  'g-', lw=2, label='Mean (last10)')
+    ax.fill_between(idx, q1_10, q3_10, alpha=0.3, color='green', label='IQR (last10)')
+
+    # last-game raw curve
+    if last_curve is not None:
+        ax.plot(idx_last, last_curve, 'b--', lw=2, label=f'Last Game ({last_date})')
+
+    ax.set_xlabel('Throw #')
+    ax.set_ylabel('Velocity (mph)')
+    ax.set_title(f'{pitcher} – In-Game Fastball Velocity Decay (n={mat.shape[1]})')
+    ax.legend(loc='lower right')
+    plt.tight_layout()
+    plt.show()
+
+def game_fastball_stats(df_pulse, pitcher, date):
+    day = pd.Timestamp(date).date()
+    sub = df_pulse[
+        (df_pulse['converted_name'] == pitcher) &
+        (df_pulse['date_corr'] == day) &
+        (df_pulse['COUNT'].notna()) & (df_pulse['COUNT'] != '')
+    ]
+    if sub.empty:
+        return (np.nan, np.nan)
+
+    fb_pool = {'FA', 'SI', 'FC'}
+    avail   = fb_pool & set(sub['PITCH_TYPE'].unique())
+    if not avail:
+        return (np.nan, np.nan)
+
+    if 'FA' in avail:
+        keep = {'FA', 'SI'} if 'SI' in avail else {'FA'}
+    else:
+        keep = {'SI'} if 'SI' in avail else {'FC'}
+
+    fb = sub[sub['PITCH_TYPE'].isin(keep)]
+    if fb.empty:
+        return (np.nan, np.nan)
+
+    return (fb['VELOCITY'].mean(), fb['VELOCITY'].max())
+
+
+# ────────────────────────────────────────────────────────────
+# Helper A – rolling z-score (28-day look-back, clipped ±3 SD)
+# ────────────────────────────────────────────────────────────
+ROLL_Z = 28
+def _z(series):
+    mu = series.rolling(ROLL_Z, min_periods=5).mean()
+    sd = series.rolling(ROLL_Z, min_periods=5).std()
+    return ((series - mu) / sd).clip(-3, 3)
+
+# ────────────────────────────────────────────────────────────
+# Helper B – fastball subset (same rules you already use)
+# ────────────────────────────────────────────────────────────
+_FASTBALL = {'FA', 'SI', 'FC'}
+
+def _fb_daily_mean(df_pulse, name):
+    sub = df_pulse.loc[
+        (df_pulse['converted_name'] == name) &
+        df_pulse['COUNT'].notna() & (df_pulse['COUNT'] != '') &
+        df_pulse['PITCH_TYPE'].isin(_FASTBALL)
+    ]
+    if sub.empty:
+        return pd.Series(dtype=float)
+    # keep FA+SI if FA exists, else SI or FC
+    types = _FASTBALL & set(sub['PITCH_TYPE'].unique())
+    keep  = {'FA', 'SI'} if 'FA' in types else {'SI'} if 'SI' in types else {'FC'}
+    sub   = sub[sub['PITCH_TYPE'].isin(keep)]
+    return sub.groupby('date_corr')['VELOCITY'].mean()
+
+# ────────────────────────────────────────────────────────────────
+# 6) Build raw_group & game_group ————————————————
+# ────────────────────────────────────────────────────────────────
+rows = []
+for (p, d), g in df_raw.groupby(['pitcher','date_corr']):
+    rt = len(g)
+    hi = (g['armSpeed_imp'] >= pct75_by[p]).sum()
+    rows.append({'pitcher':p, 'date':d,
+                 'raw_total':rt, 'raw_high_intent':hi})
+raw_group = pd.DataFrame(rows)
+
+game_group = (
+    df_raw[df_raw['tag'].str.contains('Game', na=False)]
+      .groupby(['pitcher','date_corr']).size()
+      .reset_index(name='game_throws')
+      .rename(columns={'date_corr':'date'})
+)
+
+# ────────────────────────────────────────────────────────────────
+# 7) Plot settings & loop ————————————————
+# ────────────────────────────────────────────────────────────────
+pitchers  = sorted(df_raw['pitcher'].unique())
+
+# ────────────────────────────────────────────────────────────────
+#  Helper – pull in-game fastballs for a pitcher
+# ────────────────────────────────────────────────────────────────
+def _fastball_subset(df, pitcher):
+    """
+    Return a Pulse-tracking slice with only *game* fastballs for `pitcher`,
+    already filtered to FA (+SI), SI or FC exactly like the velocity-decay
+    helpers do.  Empty DataFrame ⇒ nothing to plot.
+    """
+    fastball_pool = {'FA', 'SI', 'FC'}
+
+    sub = df[
+        (df['converted_name'] == pitcher) &
+        df['PITCH_TYPE'].isin(fastball_pool) &
+        df['COUNT'].notna() & (df['COUNT'] != '')
+    ]
+
+    avail = fastball_pool & set(sub['PITCH_TYPE'].unique())
+    if not avail:
+        return pd.DataFrame()          # no fastballs at all
+
+    if 'FA' in avail:
+        keep = {'FA', 'SI'} if 'SI' in avail else {'FA'}
+    else:
+        keep = {'SI'} if 'SI' in avail else {'FC'}
+
+    out = sub[sub['PITCH_TYPE'].isin(keep)].copy()
+    # sanity: make sure date_corr exists for grouping later
+    if 'date_corr' not in out.columns:
+        out['date_corr'] = out['DATE_TIME'].dt.date
+    return out
+
+
+from matplotlib.colors import Normalize
+from matplotlib import cm
+
+# ────────────────────────────────────────────────────────────────
+#  ORIGINAL scatter: viridis + 7-day avg + tick-per-game-date
+# ────────────────────────────────────────────────────────────────
+def _scatter_plot(df, metric, metric_lbl, player_lbl):
+    # 0) keep only the columns we need (no duplicates)
+    if metric == "VELOCITY":
+        cols = ["VELOCITY", "date_corr"]
+    else:
+        cols = [metric, "VELOCITY", "date_corr"]
+
+    df = df[cols].dropna()
+    if df.empty:
+        return
+
+    # 1) proper datetime & sort
+    df["DATE"] = pd.to_datetime(df["date_corr"])
+    df.sort_values("DATE", inplace=True)
+
+    # 2) colour-coding by fastball velo
+    cmap = cm.get_cmap("viridis")
+    norm = Normalize(vmin=df["VELOCITY"].min(), vmax=df["VELOCITY"].max())
+
+    # 3) 7-day rolling mean of the metric
+    avg7 = (df.groupby("DATE")[metric]
+              .mean()
+              .rolling(7, min_periods=1)
+              .mean())
+
+    # 4) plot
+    fig, ax = plt.subplots()
+
+    sc = ax.scatter(df["DATE"], df[metric],
+                    c=df["VELOCITY"], cmap=cmap, norm=norm,
+                    s=15, alpha=.8, label="Throws")
+
+    ax.plot(avg7.index, avg7.values, "k-", lw=2, label="7-day Avg")
+
+    ax.set_title(f"{player_lbl} – {metric_lbl} In-Game")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(metric_lbl)
+
+    # ticks only on dates we actually have data for
+    all_dates = pd.to_datetime(sorted(df["DATE"].unique()))
+    ax.set_xticks(all_dates)
+    ax.set_xticklabels([d.strftime("%b %d") for d in all_dates],
+                       rotation=45, ha="right")
+
+    ax.margins(x=0.01)
+
+    # colour-bar
+    cbar = fig.colorbar(sc, ax=ax, pad=.02)
+    cbar.set_label("Fastball Velo (mph)")
+
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def _forecast_transition(diff_series, window=5):
+    """
+    Estimate days until diff_series crosses zero by fitting a linear trend
+    over the last `window` points.  Returns None if no crossing is predicted.
+    """
+    # grab the last `window` values as a 1-d numpy array:
+    if isinstance(diff_series, pd.Series):
+        y = diff_series.iloc[-window:].values
+    else:
+        # assume it’s already an ndarray
+        y = diff_series[-window:]
+    if len(y) < window:
+        return None
+
+    x = np.arange(len(y))
+    slope = np.cov(x, y, bias=True)[0, 1] / np.var(x)
+    current = y[-1]
+    if slope < 0 and current > 0:
+        return current / (-slope)
+    if slope > 0 and current < 0:
+        return current / (-slope)
+    return None
+
+
+# ── replace your existing detect_velocity_cycles ──
+
+def detect_velocity_cycles(df_raw, pitcher,
+                           short_win=7, long_win=28,
+                           raw_weight=0.6, imp_weight=0.4,
+                           min_phase_len=5):
+    """
+    Combines raw & imputed arm-speed into a single signal,
+    finds Load/Deload cycles, and enforces a minimum 5-day phase.
+    """
+    # 1) daily averages
+    sub = df_raw[df_raw['pitcher'] == pitcher].dropna(subset=['armSpeed_imp','armSpeed'])
+    daily_imp = sub.groupby('date_corr')['armSpeed_imp'].mean().sort_index()
+    daily_raw = sub.groupby('date_corr')['armSpeed'].mean().sort_index()
+
+    # 2) normalize
+    dfn = pd.DataFrame({'imp':daily_imp, 'raw':daily_raw}).dropna()
+    imp_z = (dfn['imp'] - dfn['imp'].mean()) / dfn['imp'].std()
+    raw_z = (dfn['raw'] - dfn['raw'].mean()) / dfn['raw'].std()
+
+    # 3) combined weighted signal
+    signal = raw_weight * raw_z + imp_weight * imp_z
+
+    # 4) rolling means & diff
+    ma_short = signal.rolling(short_win, min_periods=1).mean()
+    ma_long  = signal.rolling(long_win , min_periods=1).mean()
+    diff     = ma_short - ma_long
+
+    # 5) detect sign‐changes
+    sign = np.sign(diff).replace(0, np.nan).ffill().bfill()
+    transitions = diff.index[(sign.shift(1) != sign) & sign.shift(1).notna()]
+
+    # 6) enforce min phase length
+    filtered = [transitions[0]] if len(transitions) else []
+    for t in transitions[1:]:
+        if (t - filtered[-1]).days >= min_phase_len:
+            filtered.append(t)
+
+    # 7) compute filtered cycle lengths
+    cycle_lengths = [
+        (filtered[i] - filtered[i-1]).days
+        for i in range(1, len(filtered))
+    ]
+
+    # 8) report
+    median_cycle = float(np.median(cycle_lengths)) if cycle_lengths else np.nan
+    current_trend = 'Load' if diff.iloc[-1] > 0 else 'Deload'
+    forecast     = _forecast_transition(diff.values, window=short_win)
+
+    return {
+        'dates'        : dfn.index,
+        'ma_short'     : ma_short,
+        'ma_long'      : ma_long,
+        'diff'         : diff,
+        'transitions'  : filtered,
+        'cycle_lengths': cycle_lengths,
+        'median_cycle' : median_cycle,
+        'current_trend': current_trend,
+        'forecast_days': forecast
+    }
+
+
+def velocity_cycle_report(df_raw, pitcher, short_win=7, long_win=28):
+    """
+    Generate a velocity cycle report for a given pitcher.
+    Displays a plot and prints a summary of the current trend,
+    median cycle length and forecast.
+    """
+    info = detect_velocity_cycles(df_raw, pitcher, short_win, long_win)
+    print(f"\n=== Velocity Cycle Report: {pitcher} ===")
+    print(f"Current trend: {info['current_trend']} (diff = {info['diff'].iloc[-1]:.2f})")
+    if info['forecast_days'] is not None:
+        print(f"Estimated {info['forecast_days']:.1f} days until the next trend change.")
+    else:
+        print("No imminent trend change predicted based on the last few days.")
+    if not np.isnan(info['median_cycle']):
+        print(f"Median cycle length: {info['median_cycle']:.1f} days across {len(info['cycle_lengths'])} cycles.")
+    else:
+        print("Insufficient data to estimate cycle length.")
+    # Plotting
+    dates = pd.to_datetime(info['dates'])
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    # Top panel: daily arm speed and moving averages
+    ax1.plot(dates, info['daily'], '.', color='grey', alpha=0.5, label='Daily Avg Arm Speed')
+    ax1.plot(dates, info['ma_short'], label=f'{short_win}-day MA', color='blue')
+    ax1.plot(dates, info['ma_long'],  label=f'{long_win}-day MA', color='orange')
+    ax1.set_ylabel('Arm Speed (deg/s)')
+    ax1.set_title(f'{pitcher} – Arm Speed and Moving Averages')
+    ax1.legend(loc='upper left')
+    # Bottom panel: difference and phase shading
+    diff = info['diff']
+    diff_dates = pd.to_datetime(diff.index)
+    ax2.plot(diff_dates, diff, color='purple', label='MA Difference')
+    ax2.axhline(0, color='black', linewidth=1)
+    # Shade load (green) and deload (red) segments
+    for i in range(len(diff)-1):
+        x = diff_dates[i:i+2]
+        y = diff.iloc[i:i+2]
+        color = 'lightgreen' if y.mean() >= 0 else '#fcbaba'
+        ax2.fill_between(x, y, 0, color=color, alpha=0.4)
+    # Mark transition dates
+    for d in info['transitions']:
+        ax2.axvline(pd.to_datetime(d), linestyle='--', color='grey', linewidth=1)
+    ax2.set_ylabel('MA diff (deg/s)')
+    ax2.set_xlabel('Date')
+    ax2.set_title('Load vs. Deload Phases (green = load, red = deload)')
+    #  ── ADD GAME‐DAY TICKS ──────────────────────────
+    # find every date where next_game>0 (i.e. today was a game)
+    game_days = df_daily.index[df_daily['is_game']]
+
+    # draw a little red “|” tick at the bottom of the diff‐panel
+    ymin, _ = ax2.get_ylim()
+    for d in game_days:
+        ax2.plot([d, d], [ymin, ymin + 0.02*(ax2.get_ylim()[1]-ymin)],
+                 color='red', linewidth=1)
+    plt.tight_layout()
+    plt.show()
+
+
+# ────────────────────────────────────────────────────────────
+#  Load-cycle detector → identical logic, different signal
+# ────────────────────────────────────────────────────────────#
+
+def detect_load_cycles(
+        df_daily,
+        short_win=7,
+        long_win=28,
+        raw_weight=0.6,
+        imp_weight=0.4,
+        zero_tol=0.02,
+        min_phase_len=3,
+        smooth_gap=False,
+        gap_smooth_win=7,
+
+        slope_win=None         # ← new: let me override which window to use for slope
+    ):
+
+    """
+    Uses both raw and imputed Load-Index signals to detect Load/Deload,
+    applies a zero‐tolerance, and skips any phase < min_phase_len days.
+    """
+    # 1) rolling means on raw & imp signals
+    imp = df_daily['load_idx']
+    raw = ((df_daily['spd_metric'] - df_daily['spd_metric'].mean())
+           / df_daily['spd_metric'].std()).clip(-3, 3)
+
+    ma_imp_s = imp.rolling(short_win, min_periods=1).mean()
+    ma_imp_l = imp.rolling(long_win,  min_periods=1).mean()
+    ma_raw_s = raw.rolling(short_win, min_periods=1).mean()
+    ma_raw_l = raw.rolling(long_win,  min_periods=1).mean()
+
+    # 2) combined diff
+    diff_imp = ma_imp_s - ma_imp_l
+    diff_raw = ma_raw_s - ma_raw_l
+    diff     = raw_weight * diff_raw + imp_weight * diff_imp
+
+    # optional smooth of gaps
+    if smooth_gap:
+        diff = diff.rolling(gap_smooth_win, 1).mean()
+
+    # 3) zero‐tolerance
+    diff[np.abs(diff) < zero_tol] = 0
+    sign = np.sign(diff).replace(0, np.nan).ffill().bfill()
+
+    # 4) find transitions
+    transitions = diff.index[(sign.shift(1) != sign) & sign.shift(1).notna()]
+
+    # 5) enforce min phase length
+    filtered = [transitions[0]] if len(transitions) else []
+    for t in transitions[1:]:
+        if (t - filtered[-1]).days >= min_phase_len:
+            filtered.append(t)
+
+    # 6) separate phase lengths
+    load_len, deload_len = [], []
+    for i in range(1, len(filtered)):
+        days = (filtered[i] - filtered[i-1]).days
+        if sign.loc[filtered[i-1]] > 0:
+            load_len.append(days)
+        else:
+            deload_len.append(days)
+
+    # 7) medians
+    median_load   = float(np.median(load_len))   if load_len   else np.nan
+    median_deload = float(np.median(deload_len)) if deload_len else np.nan
+
+    # grab the most recent diff value
+    last_val = diff.iloc[-1]
+
+    # 8) compute slope over the last S points
+    W = slope_win or short_win
+    y = diff.values[-W:]
+    x = np.arange(len(y))
+    slope = np.cov(x, y, bias=True)[0,1] / np.var(x)
+
+    # 9) forecast days until diff hits zero if slope points toward zero
+    if slope * last_val < 0:
+        forecast = abs(last_val / slope)
+    else:
+        forecast = None
+
+    # 10) enforce your “if we’re sitting smack at zero, call it now”
+    if forecast is None and abs(last_val) < zero_tol:
+        forecast = 0.0
+
+    # define current phase
+    current_trend = 'Load' if last_val > 0 else 'Deload'
+
+    # compute slope over the last W points
+    W = slope_win or short_win
+    y = diff.values[-W:]
+    x = np.arange(len(y))
+    slope = np.cov(x, y, bias=True)[0,1] / np.var(x)
+
+    # forecast days until diff hits zero
+    if slope * last_val < 0:
+        forecast = abs(last_val / slope)
+    else:
+        forecast = None
+
+    # if we’re effectively at zero right now
+    if forecast is None and abs(last_val) < zero_tol:
+        forecast = 0.0
+
+    # compute days into current phase
+    if filtered:
+        current_cycle_days = (diff.index[-1] - filtered[-1]).days + 1
+    else:
+        current_cycle_days = len(diff)
+
+    return {
+        'diff': diff,
+        'transitions': filtered,
+        'median_load': median_load,
+        'median_deload': median_deload,
+        'current_trend': current_trend,
+        'forecast_days': forecast,
+        'current_cycle_days': current_cycle_days
+    }
+
+
+def load_cycle_report(df_daily, player,
+                      short_win=7, long_win=28,
+                      **kwargs):
+    info = detect_load_cycles(df_daily,
+                               short_win=short_win,
+                               long_win=long_win,
+                               **kwargs)
+    diff = info['diff']
+    dates = pd.to_datetime(diff.index)
+
+    # align df_daily so we can look up throws for every diff point
+    aln = df_daily.reindex(dates)
+
+    fig, ax = plt.subplots(figsize=(12, 4), sharex=True)
+
+    # ── diff curve ────────────────────────────────────────────────────
+    ax.plot(dates, diff, color='purple', lw=1.5, label='MA Difference')
+    ax.axhline(0, color='black', lw=1)
+
+    # ── build phase edges: [start, …transitions…, end] ────────────────
+    edges = [dates[0]] + info['transitions'] + [dates[-1] + pd.Timedelta(days=1)]
+
+    for start, end in zip(edges[:-1], edges[1:]):
+        seg_mask = (dates >= start) & (dates < end)
+        if not seg_mask.any():
+            continue
+
+        diff_seg = diff[seg_mask]
+
+        # % GAME workload in this phase
+        g_throws   = aln.loc[seg_mask, 'next_game'].sum()      # game throws
+        total_thr  = aln.loc[seg_mask, 'total_throws'].sum()
+        game_ratio = (g_throws / total_thr) if total_thr else 0.0
+        game_ratio = np.clip(game_ratio, 0, 1)
+
+        # choose colours
+        is_load  = diff_seg.mean() >= 0
+        base_c , dark_c = (('#b7e6b7', '#006400') if is_load
+                           else ('#fcbaba', '#8b0000'))
+
+        # lighter shade – whole area
+        ax.fill_between(diff_seg.index, 0, diff_seg,
+                        color=base_c, alpha=.5, lw=0)
+
+        # darker shade – % GAME share
+        ax.fill_between(diff_seg.index, 0, diff_seg * game_ratio,
+                        color=dark_c, alpha=.8, lw=0)
+
+    # mark phase transitions
+    for t in info['transitions']:
+        ax.axvline(pd.to_datetime(t), ls='--', color='grey', lw=1)
+
+    # optional FB-velo overlay (kept from old version)
+    if 'velo_7d' in aln.columns:
+        ax2 = ax.twinx()
+        ax2.plot(dates, aln['velo_7d'], color='dodgerblue', lw=1.5,
+                 label='7-day FB velo')
+        ax2.set_ylabel('FB Velo (mph)', color='dodgerblue')
+        ax2.tick_params(axis='y', colors='dodgerblue')
+        ax2.legend(loc='upper right')
+
+    # tiny red tick for every game day
+    ymin, _ = ax.get_ylim()
+    for d in df_daily.index[df_daily['is_game']]:
+        ax.plot([d, d], [ymin, ymin + 0.02 * (ax.get_ylim()[1] - ymin)],
+                color='red', lw=1)
+
+    ax.set_ylabel('MA diff')
+    ax.set_xlabel('Date')
+    ax.set_title('Load (green) vs Deload (red) — darker shade = % GAME workload')
+    ax.legend(loc='upper left')
+    ax.xaxis.set_major_locator(LOCATOR)
+    ax.xaxis.set_major_formatter(FORMATTER)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha='center', fontsize=8)
+    plt.tight_layout()
+    plt.show()
+# ========================================================================
+
+    # console summary
+    days_in = info['current_cycle_days']
+    print(f"\n=== Load-Cycle Report: {player} ===")
+    print(f"Current trend: {info['current_trend']} "
+          f"(diff = {info['diff'].iloc[-1]:.2f}) – "
+          f"{days_in} day{'s' if days_in!=1 else ''} into this phase")
+
+    fd = info['forecast_days']
+    if fd is not None:
+        if fd == 0:
+            print("Trend change happening now based on recent direction.")
+        else:
+            print(f"Estimated {fd:.1f} days until next change.")
+    else:
+        print("No imminent trend change predicted.")
+
+    if not np.isnan(info['median_load']):
+        print(f"Median Load   phase: {info['median_load']:.1f} d")
+    if not np.isnan(info['median_deload']):
+        print(f"Median Deload phase: {info['median_deload']:.1f} d")
+
+
+# ── REPORT GENERATORS ────────────────────────────────────────────────
+def individual_report(player):
+    # ---------- pull the right slices *right now* ----------
+    summary = raw_group[raw_group['pitcher'] == player]
+    raw_all = df_raw[df_raw['pitcher'] == player]
+    pdata   = df_clean[df_clean['pitcher'] == player]
+    wl_p    = wl_df[wl_df['pitcher'] == player]
+    game_p  = game_group[game_group['pitcher'] == player]
+    clear_output(wait=True)           # clears previous output each time
+    print(f"=== Individual Report: {player} ===\n")
+    opt_rest, acwr_lo, acwr_hi = _calibrate_rest_acwr(player)
+    print(f"Optimal Rest Days  : {opt_rest} days")
+    print(f"Optimal ACWR Range : {acwr_lo:.2f} – {acwr_hi:.2f}")
+
+
+    # —— new: overall fastball velocity stats ——
+    outings = _build_outing_rows(player)
+    if not outings.empty:
+        avg_velo_all = outings['avg_velo'].mean()
+        max_velo_all = outings['max_velo'].max()
+        print(f"Avg Fastball Velo : {avg_velo_all:.2f} mph")
+        print(f"Peak Fastball Velo: {max_velo_all:.2f} mph\n")
+    else:
+        print("No outings to report average/peak velo.\n")
+
+    # —— 1) Volume + Intent (dual-axis bar chart) ——
+
+    # 1. Compute daily avg imputed arm speed (as before)
+    daily_speed = (
+        raw_all.groupby('date_corr')['armSpeed_imp']
+               .mean()
+               .rename('avg_imp_speed')
+               .to_frame()
+    )
+    # 7-day MA of imputed speed
+    daily_speed['ma7_imp'] = daily_speed['avg_imp_speed'].rolling(7, min_periods=1).mean()
+
+    # 2. Compute daily raw arm speed and its 7-day MA
+    daily_raw = raw_all.groupby('date_corr')['armSpeed'].mean().rename('avg_raw_speed')
+    daily_raw_ma7 = daily_raw.rolling(7, min_periods=1).mean()
+
+    # 3. Compute the two 90th‐percentile thresholds (all‐time & last 10d) on capped speeds
+    hist90   = np.nanpercentile(raw_all['armSpeed_cap'], 90)
+    mask10   = raw_all['date_corr'] >= raw_all['date_corr'].max() - pd.Timedelta(days=9)
+    recent90 = (np.nanpercentile(raw_all.loc[mask10, 'armSpeed_cap'], 90)
+                if mask10.any() else np.nan)
+    hist_avg = raw_all['armSpeed_cap'].mean()   # for color‐center
+
+    # 4. Build a date index that covers every calendar day,
+    #    and pull total throws from the workload CSV (wl_p).
+    full_dates = pd.date_range(
+        wl_p['date'].min(),
+        wl_p['date'].max(),
+        freq='D'
+    )
+    # reindex wl_p onto full_dates
+    wl_indexed = (
+        wl_p.set_index(pd.to_datetime(wl_p['date']))
+            ['wl_total_throws']
+            .reindex(full_dates)
+            .fillna(0)
+    )
+
+    # align daily_speed (imputed) to full_dates
+    daily_speed = daily_speed.reindex(full_dates).fillna(method='ffill')
+    # align daily_raw to full_dates
+    daily_raw = daily_raw.reindex(full_dates)
+
+    # ── helper: days‑since‑last ≥90th‑pct throw (“flag90”) ──────────
+    #   • cnt90  =  number of ≥90th‑pct throws each day (0/1/…)
+    #   • days_since_90 = running counter of consecutive days *without* one
+    #
+    cnt90 = (
+        raw_all.assign(hit90 = raw_all['armSpeed_imp'] >= pct90_by[player])
+               .groupby('date_corr')['hit90']
+               .sum()
+               .reindex(full_dates.date, fill_value=0)    # full calendar
+    )
+
+    days_since_90, gap = {}, 999
+    for d, v in cnt90.items():
+        gap = 0 if v > 0 else gap + 1
+        days_since_90[d] = gap
+
+    # map‑style lookup used later in the Last‑10‑day table
+    flag90 = days_since_90        # <- behaves exactly like before
+
+
+    # 5. Normalize “avg_imp_speed” for color‐mapping:
+    norm = TwoSlopeNorm(
+        vmin=daily_speed['avg_imp_speed'].min(),
+        vcenter=hist_avg,
+        vmax=hist90
+    )
+    colors = bwr_custom(norm(daily_speed['avg_imp_speed']))
+
+    # ──────────────────────────────────────────────────────────────
+    # NEW • 7‑day rolling 90th‑pct (raw arm‑speed)  ➜  p90_7d
+    # ──────────────────────────────────────────────────────────────
+    # 1) daily list of *all* raw arm‑speed readings ----------------
+    spd_by_day = (
+        raw_all
+        .groupby('date_corr')['armSpeed']          # all raw values, NaNs already gone
+        .apply(list)                               # list per day
+        .reindex(full_dates.date, fill_value=[])   # align to calendar
+    )
+
+    # 2) rolling window (last 7 calendar days, inclusive) ----------
+    p90_vals = []
+    for i, day in enumerate(full_dates):
+        window_days = full_dates[max(0, i-6):i+1].date      # last ≤7 days
+        # flatten lists from those days
+        window_spd = sum((spd_by_day[d] for d in window_days), [])
+        p90_vals.append(np.nanpercentile(window_spd, 90)
+                        if window_spd else np.nan)
+
+    p90_7d = pd.Series(p90_vals, index=full_dates)
+
+    # 6. Create the figure with two y‐axes
+    fig, ax1 = plt.subplots(figsize=FIGSIZE)
+    ax2 = ax1.twinx()
+
+    # 7. Plot bars of total_throws on ax1, colored by avg_imp_speed
+    bars = ax1.bar(
+        full_dates,
+        wl_indexed.values,
+        color=colors,
+        width=0.8,
+        label='Total Throws'
+    )
+    ax1.set_ylabel('Total Throws')
+    ax1.set_xlabel('Date')
+
+    # 8. On ax2, plot the two 90th‐percentile reference lines
+    ax2.plot(
+        full_dates,
+        [hist90] * len(full_dates),
+        ':',
+        color='crimson',
+        linewidth=1.5,
+        label='90th all-time'
+    )
+    ax2.plot(
+        full_dates,
+        [recent90] * len(full_dates),
+        ':',
+        color='salmon',
+        linewidth=1.5,
+        label='90th last 10d'
+    )
+
+    # ─── annotate 90th‐pct lines with a little point offset ─────────
+    last_date = full_dates[-1]
+    ax2.annotate(f'{hist90:.1f}',
+                 xy=(last_date, hist90),
+                 xytext=(5, 0),                # shift 5 points to the right
+                 textcoords='offset points',
+                 va='center', ha='left')
+    ax2.annotate(f'{recent90:.1f}',
+                 xy=(last_date, recent90),
+                 xytext=(5, 0),
+                 textcoords='offset points',
+                 va='center', ha='left')
+
+
+    # 9. On ax2, plot the two 7-day MA lines:
+    #     • ma7_imp (imputed)
+    #     • daily_raw_ma7 (raw)
+    ax2.plot(
+        daily_speed.index,
+        daily_speed['ma7_imp'],
+        '-',
+        color='dimgray',
+        linewidth=1.5,
+        label='7-day MA Imp'
+    )
+    ax2.plot(
+        daily_raw_ma7.index,
+        daily_raw_ma7.values,
+        '-',
+        color='black',
+        linewidth=1.5,
+        label='7-day MA Raw'
+    )
+
+    ax2.plot(p90_7d.index, p90_7d.values,
+            '-', color='navy', lw=1.5, label='7‑day 90th Raw')
+
+    ax2.set_ylabel('Arm Speed (deg/s)')
+
+    # 10. Combine legends from both axes, and set title
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', bbox_to_anchor=(1.12,1))
+
+    ax1.set_title(f'{player} – Volume + Intent')
+
+    # 11. Set up the x‐axis formatter
+    ax1.xaxis.set_major_locator(LOCATOR)
+    ax1.xaxis.set_major_formatter(FORMATTER)
+    plt.setp(ax1.get_xticklabels(),
+             rotation=90,
+             ha='center',
+             fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+
+    # —— 2) Daily Total Throws + ACWR ——————————————
+    # a) count 75th-pct throws
+    # ---------------- dynamic 75th‑percentile threshold (rolling 28 d) ------------
+    # pre‑compute a date→threshold lookup so we can vectorise the flagging
+    thr_28 = {}
+    # make sure raw_all is sorted by date
+    raw_sorted = raw_all.sort_values('date_corr')
+    dates_seq  = pd.to_datetime(raw_sorted['date_corr'].unique())
+    for d in dates_seq:
+        win_start = d - pd.Timedelta(days=27)
+        mask = (raw_sorted['date_corr'] >= win_start.date()) & (raw_sorted['date_corr'] <= d.date())
+        thr_28[d.date()] = np.nanpercentile(raw_sorted.loc[mask, 'armSpeed_imp'], 75)
+
+    # apply the per‑day threshold to flag high‑intent throws
+    hi_flag = raw_sorted.apply(
+        lambda r: r['armSpeed_imp'] >= thr_28[r['date_corr']],
+        axis=1
+    )
+    hi75 = (raw_sorted.assign(high=hi_flag)
+                        .groupby('date_corr')['high']
+                        .sum()
+                        .reset_index(name='count_75')
+                        .rename(columns={'date_corr': 'date'}))
+
+    # b) merge workload + raw + hi
+    daily = (
+        wl_p.rename(columns={'wl_total_throws':'total_throws'})
+            .merge(summary[['date','raw_total','raw_high_intent']], on='date', how='left')
+            .merge(hi75, on='date', how='left')
+            .fillna({'count_75':0,'raw_total':0,'raw_high_intent':0})
+    )
+    daily['mismatch']   = daily.apply(
+        lambda r: pd.notna(r['total_throws']) and r['raw_total'] != r['total_throws'],
+        axis=1
+    )
+    daily['next_game']  = daily['date'].map(game_p.set_index('date')['game_throws']).fillna(0)
+    daily['high_intent'] = daily['raw_high_intent'] + daily['next_game']*daily['mismatch']
+
+    # for every throw, if it's ≥ 50th-pct, weight = (armSpeed_imp / p50)**expo
+    p50 = df_raw['pitcher'].map(pct50_by)
+
+    # pull in that weighted sum:
+    daily = daily.merge(
+        df_raw.groupby('date_corr')['intent_weight']
+              .sum()
+              .rename('daily_intent_weight'),
+        left_on='date', right_index=True, how='left'
+    ).fillna({'daily_intent_weight':0})
+
+    v50, v75 = daily['total_throws'].quantile([.5,.75])
+    daily['vol_label']   = pd.cut(daily['total_throws'], [-1,v50,v75,daily['total_throws'].max()],
+                                  labels=['Low','Medium','High'])
+    daily['intent_ratio'] = daily['high_intent']/daily['total_throws'].replace(0,np.nan)
+    daily['intent_label'] = pd.cut(daily['intent_ratio'], [-.01,.25,.5,1],
+                                   labels=['Low','Medium','High'])
+
+    # ── SPEED metric for every calendar day ───────────────────────────
+    daily['spd_metric'] = (
+        raw_all.groupby('date_corr')['armSpeed_imp']
+               .mean()
+               .reindex(daily['date'])
+               .values
+    )
+
+    # --------------------------------------------------------------------
+    daily = daily.sort_values('date')        # 1) guarantee ascending order
+
+    full_idx = pd.date_range(daily['date'].min(),
+                             daily['date'].max(),
+                             freq='D')       # 2) every calendar day
+
+    daily = (
+        daily.set_index('date')
+             .reindex(full_idx)              # 3) insert the off-days
+             .rename_axis('date')
+             .reset_index()
+    )
+
+    # —— DAYS SINCE LAST GAME ————————————————
+    daily = daily.set_index('date')              # ensure DateTimeIndex
+    daily['is_game'] = daily['next_game'] > 0    # mark outing days
+    last_game_date = daily.index.to_series().where(daily['is_game']).ffill()
+    daily['days_since_game'] = (daily.index.to_series() - last_game_date).dt.days
+    daily.loc[daily['is_game'], 'days_since_game'] = 0
+    daily = daily.reset_index()                  # back to having 'date' column
+
+    # — New daily-level metrics —─────────────────────────────
+    # 1) day-to-day workload variation
+    daily['throw_var']   = daily['total_throws'].diff().abs().fillna(0)
+    # 2) 7-day rolling sum of throws
+    daily['roll7_throws'] = daily['total_throws'].rolling(7, min_periods=1).sum()
+    # 3) ratio of high-intent throws to total throws
+    daily['hi_ratio']     = daily['high_intent'] / daily['total_throws'].replace(0, np.nan)
+
+    # ------------------------------------------------------------------
+    # Hybrid Volume × Density intent metric  (28-day rolling, winsorised)
+    # –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    ROLL = 28                      # calendar days
+    daily = daily.set_index('date')                # need DateTimeIndex
+
+    # --- 1) simple density (HI ÷ total) --------------------------------
+    daily['hi_ratio'] = daily['high_intent'] / daily['total_throws'].replace(0,np.nan)
+
+    # --- 2) winsorise BOTH series at ±3 SD inside the rolling window ---
+    for col in ['daily_intent_weight', 'hi_ratio']:
+        roll_mean = daily[col].rolling(ROLL, min_periods=5).mean()
+        roll_std  = daily[col].rolling(ROLL, min_periods=5).std()
+        z         = ((daily[col] - roll_mean) / roll_std).clip(-3, 3)
+        daily[col + '_z'] = z                      # store z-score
+
+    # --- 3) hybrid “volume × density” score ---------------------------
+    daily['hybrid_intent'] = daily['daily_intent_weight'] * daily['hi_ratio']
+
+    hyb_p10 = daily['hybrid_intent'].rolling(ROLL, min_periods=5).quantile(.10)
+    hyb_p90 = daily['hybrid_intent'].rolling(ROLL, min_periods=5).quantile(.90)
+    den_h   = (hyb_p90 - hyb_p10).replace(0, np.nan)
+
+    daily['intent_score'] = ((daily['hybrid_intent'] - hyb_p10) / den_h) \
+                              .clip(0, 1) \
+                              .fillna(0)
+    # ────────────────────────────────────────────────────────────
+    # ===  Composite LOAD-INDEX =================================
+    #     volume + intent + game-FB-velo   (all z-scored)
+    # ────────────────────────────────────────────────────────────
+    # 1)  GAME fastball velo   → 7-day rolling mean
+    fb_mean = _fb_daily_mean(df_pulse, player)
+    daily['game_fb_velo'] = daily.index.map(lambda ts: fb_mean.get(ts.date(), np.nan))        # aligns on calendar
+    daily['velo_7d']      = daily['game_fb_velo'].rolling(7, 1).mean()
+    # simple ffill so weeks without a game still have a value
+    daily['velo_7d']      = daily['velo_7d'].ffill()
+
+    # 2)  Rolling z-scores inside the same 28-day window
+    daily['vol_z']    = _z(daily['total_throws'])
+    daily['intent_z'] = _z(daily['hybrid_intent'])
+    daily['velo_z']   = -_z(daily['velo_7d'])   # NEGATE → lower velo = ↑load
+
+    # 3)  Weighted composite  (feel free to tweak weights)
+    daily['load_idx'] = (
+          0.60 * daily['vol_z']
+        + 0.30 * daily['intent_z']
+        + 0.10 * daily['velo_z']
+    )
+
+    daily['velo_28'] = daily['velo_7d'].rolling(28, 1).mean()
+
+    # GAINS condition for each calendar day
+    daily['flag_gains'] = (
+            (daily['load_idx'] <= 0) &          # deload / light-load
+            (daily['velo_7d'] >= daily['velo_28'])   # velo bump
+    )
+
+    # ────────────────────────────────────────────────────────────
+
+
+    daily = daily.reset_index()     # back to flat table for the rest
+
+    # ════════════════════════════════════════════════════════════════
+    # Build quick-lookup dicts to avoid KeyErrors later
+    intent_map = daily.set_index('date')['intent_score']
+    spd_map    = daily.set_index('date')['spd_metric']   # optional but handy
+    # ════════════════════════════════════════════════════════════════
+
+    # ── anchor points (10-90th) for the whole season window ───────────
+    work_vol = daily['total_throws']   > 0
+    work_hi  = daily['high_intent']    > 0
+    work_spd = daily['spd_metric'].notna()
+
+    vol10    = daily.loc[work_vol, 'total_throws'].quantile(.10)
+    vol90    = daily.loc[work_vol, 'total_throws'].quantile(.90)
+    vol90    = vol90 if vol90 > 0 else 1
+    spd_min  = daily.loc[work_spd, 'spd_metric'].min()
+    spd90    = daily.loc[work_spd, 'spd_metric'].quantile(.90)
+
+    vol_den = max(vol90 - vol10, 1)
+    spd_den = max(spd90 - spd_min, 1)
+
+    # ── component scores for *every* day ──────────────────────────────
+    daily['vol_score']   = (daily['total_throws'] / vol90).clip(0, 1)
+    spd_raw               = ((daily['spd_metric'] - spd_min) / spd_den).clip(0, 1)
+    daily['speed_score'] = 0.25 + 0.75 * spd_raw                      # same floor
+    daily['game_bonus']  = (daily['next_game'] > 0).astype(int) * 0.10
+
+    # ── **raw (un-clipped) composite   &   capped composite** ─────────
+    daily['raw_comp'] = (
+        0.35*daily['vol_score'] +
+        0.30*daily['intent_score'] +
+        0.25*daily['speed_score'] +
+        daily['game_bonus']
+    )
+
+    daily['acute']   = daily['raw_comp'].ewm(span=7,  adjust=False).mean()
+    daily['chronic'] = daily['raw_comp'].ewm(span=28, adjust=False).mean()
+    daily['acwr']    = daily['acute'] / daily['chronic']
+    acwr_map = daily.set_index('date')['acwr']
+    # save it for the next pre-compute run
+    acwr_map_dict = {}  # we'll fill this later per-player
+    acwr_map_dict[player] = acwr_map.copy()
+
+    # — Summarize between-outings —───────────────────────────
+    daily['segment'] = daily['is_game'].cumsum()
+    between = (
+        daily.groupby('segment')
+             .apply(lambda g: pd.Series({
+                 'segment':       g['segment'].iat[0],
+                 'avg_speed':     g['spd_metric'].mean(),
+                 'p90_speed':     np.nanpercentile(g['spd_metric'], 90),
+                 'sum_variation': g['throw_var'].sum(),
+                 'total_throws_β': g['total_throws'].sum(),
+                 'hi_ratio_β':    g['high_intent'].sum() / max(g['total_throws'].sum(), 1)
+             }))
+             .reset_index(drop=True)
+    )
+
+    def make_label(r):
+        v,i = r['vol_label'], r['intent_label']
+        if v=='High'   and i in ['High','Medium']: return 'High'
+        if v=='High':   return 'Medium'
+        if v=='Medium' and i=='High':            return 'High'
+        if v=='Medium': return 'Medium'
+        if v=='Low'    and i=='High':            return 'Medium'
+        return 'Low'
+    daily['label'] = daily.apply(make_label, axis=1)
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.bar(daily['date'], daily['total_throws'],
+           color=daily['label'].map({'High':'crimson','Medium':'#FFFF99','Low':'royalblue'}))
+    acwr_ax = ax.twinx()
+    acwr_ax.set_ylabel('ACWR')
+    acwr_vals  = daily['acwr']
+    acwr_dates = pd.to_datetime(daily['date'])
+    for i in range(1, len(acwr_vals)):
+        if np.isnan(acwr_vals.iat[i-1]) or np.isnan(acwr_vals.iat[i]):
+            continue
+        colour = (
+            'red'   if acwr_vals.iat[i] > 1.3 else
+            'blue'  if acwr_vals.iat[i] < 0.8 else
+            'black'
+        )
+        acwr_ax.plot(acwr_dates.iloc[i-1:i+1],
+                     acwr_vals.iloc[i-1:i+1],
+                     color=colour, lw=2)
+    acwr_ax.axhline(0.8, ls='--', lw=1, color='grey')
+    acwr_ax.axhline(1.3, ls='--', lw=1, color='grey')
+    acwr_ax.set_ylim(0, max(2, acwr_vals.max()*1.1))
+    from matplotlib.ticker import MultipleLocator
+    acwr_ax.yaxis.set_major_locator(MultipleLocator(0.10))
+    lines3, labels3 = acwr_ax.get_legend_handles_labels()
+    fig.legend(lines3, labels3, loc='upper right')
+    ax.set_title(f'{player} – Daily Throws + ACWR')
+    ax.set_xlabel('Date'); ax.set_ylabel('Total Throws')
+    ax.xaxis.set_major_locator(LOCATOR)
+    ax.xaxis.set_major_formatter(FORMATTER)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha='center', fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+    # —— 2B) Chronic & Acute Work‑Load (total vs. hi‑intent) ————————
+    # add rolling sums only if they don’t already exist
+    if 'roll28_throws' not in daily.columns:
+        daily['roll28_throws'] = daily['total_throws'].rolling(28, min_periods=1).sum()
+    if 'roll7_throws' not in daily.columns:
+        daily['roll7_throws']  = daily['total_throws'].rolling(7,  min_periods=1).sum()
+    if 'roll28_hi' not in daily.columns:
+        daily['roll28_hi']     = daily['high_intent'].rolling(28, min_periods=1).sum()
+    if 'roll7_hi'  not in daily.columns:
+        daily['roll7_hi']      = daily['high_intent'].rolling(7,  min_periods=1).sum()
+
+    # 2B‑1  ⟶  CHRONIC workload  (28‑day rolling)
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.plot(daily['date'], daily['roll28_throws'],
+            color='purple', lw=2, label='28‑day total')
+    ax.plot(daily['date'], daily['roll28_hi'],
+            color='orange', lw=2, ls='--', label='28‑day hi‑intent')
+    ax.set_title(f'{player} – Chronic Work‑Load (28‑day rolling)')
+    ax.set_xlabel('Date');  ax.set_ylabel('Throw Count')
+    ax.xaxis.set_major_locator(LOCATOR); ax.xaxis.set_major_formatter(FORMATTER)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha='center', fontsize=8)
+    ax.legend(loc='upper left')
+    plt.tight_layout();  plt.show()
+
+    # 2B‑2  ⟶  ACUTE workload  (7‑day rolling)
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.plot(daily['date'], daily['roll7_throws'],
+            color='forestgreen', lw=2, label='7‑day total')
+    ax.plot(daily['date'], daily['roll7_hi'],
+            color='crimson', lw=2, ls='--', label='7‑day hi‑intent')
+    ax.set_title(f'{player} – Acute Work‑Load (7‑day rolling)')
+    ax.set_xlabel('Date');  ax.set_ylabel('Throw Count')
+    ax.xaxis.set_major_locator(LOCATOR); ax.xaxis.set_major_formatter(FORMATTER)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha='center', fontsize=8)
+    ax.legend(loc='upper left')
+    plt.tight_layout();  plt.show()
+
+
+    # ── 3 & 4 • Arm-Slot & Shoulder-Rotation (raw ≥75th, ≥20 throws) ──
+    MIN_TOTAL_THROWS = 20
+    pct75 = pct75_by[player]
+
+    # 1) keep full sessions that meet the 20-throw rule
+    qual_days = (raw_all.groupby('date_corr')
+                          .filter(lambda g: len(g) >= MIN_TOTAL_THROWS))
+
+    # 2) within those days, keep only ≥75th-pct raw arm-speed throws
+    hi_speed = qual_days[qual_days['armSpeed'] >= pct75]
+
+    # 3) per-day means
+    slot_day = (hi_speed.groupby('date_corr')['armSlot']
+                          .mean()
+                          .sort_index()
+                          .rename('mu_slot')
+                          .to_frame())
+    rot_day  = (hi_speed.groupby('date_corr')['shoulderRotation']
+                          .mean()
+                          .sort_index()
+                          .rename('mu_rot')
+                          .to_frame())
+
+    # 4) 7-session rolling means
+    slot_day['ma7'] = slot_day['mu_slot'].rolling(7, 1).mean()
+    rot_day ['ma7'] = rot_day ['mu_rot' ] .rolling(7, 1).mean()
+
+    # 5) plotting helper (unchanged)
+    def _plot(df, overall, title, ylabel):
+        fig, ax = plt.subplots(figsize=FIGSIZE)
+        ax.plot(df.index, df['ma7'], lw=2, label='7-session mean')
+        ax.hlines(overall, df.index.min(), df.index.max(),
+                  linestyles='--', label='Overall mean')
+        ax.set_title(f'{player} – {title}')
+        ax.set_xlabel('Date'); ax.set_ylabel(ylabel)
+        ax.legend()
+        ax.xaxis.set_major_locator(LOCATOR)
+        ax.xaxis.set_major_formatter(FORMATTER)
+        plt.setp(ax.get_xticklabels(), rotation=90, ha='center', fontsize=8)
+        plt.tight_layout()
+        plt.show()
+
+
+    overall_slot = hi_speed['armSlot'].mean()
+    overall_rot  = hi_speed['shoulderRotation'].mean()
+    _plot(slot_day, overall_slot,
+          'Arm Slot (raw ≥75th, 7 session MA)', 'Arm Slot')
+    _plot(rot_day,  overall_rot,
+          'Shoulder Rotation (raw ≥75th, 7 session MA)', 'Shoulder Rotation')
+
+    # —— 6) Daily Throw Intensity Distribution (stacked %, +7-day ≥75th) —
+    bins   = [-np.inf, pct50_by[player], pct75_by[player], np.inf]
+    labels = ['below_50','50_to_75','above_75']
+    cat    = pdata.assign(speed_bin=pd.cut(pdata['armSpeed_imp'], bins=bins, labels=labels))
+    daily_bins = (
+        cat.groupby(['date_corr', 'speed_bin'], observed=False)
+           .size()
+           .unstack(fill_value=0)
+    )
+    daily_pct = daily_bins.div(daily_bins.sum(axis=1), axis=0)
+    hi_ratio  = daily_bins['above_75'] / daily_bins.sum(axis=1)
+    hi_7d     = hi_ratio.rolling(7,1).mean()
+    dates     = pd.to_datetime(daily_pct.index)
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    bottom = np.zeros(len(dates))
+    colors = ['blue','#FFFF99','red']
+    lbls   = ['<50th','50–75th','≥75th']
+    for col,c,lab in zip(labels,colors,lbls):
+        ax.bar(dates, daily_pct[col], bottom=bottom, width=0.8, label=lab, color=c)
+        bottom += daily_pct[col].values
+    ax.plot(dates, hi_7d, color='black', lw=2, label='7-day mean ≥75th')
+    ax.axhline(0.10, linestyle='--', lw=1, label='0.10 threshold')
+    ax.set_title(f'{player} – Daily Throw Intensity Distribution')
+    ax.set_xlabel('Date'); ax.set_ylabel('Proportion')
+    ax.legend(loc='upper right'); ax.set_ylim(0,1)
+    ax.xaxis.set_major_locator(LOCATOR)
+    ax.xaxis.set_major_formatter(FORMATTER)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha='center', fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+    # —— 8) Arm Speed-decay curve (mean±IQR, last10 vs hist) ——————
+    QUAL_MIN, QUAL_MAX, NLINE = 50, 130, 0.95
+    curves = []
+    for date, g in raw_all.groupby('date_corr'):
+        g_valid = g[g['armSpeed'].notna()]
+        if not (QUAL_MIN < len(g_valid) < QUAL_MAX):
+            continue
+        if (g_valid['armSpeed'] >= pct75_by[player]).sum() == 0:
+            continue
+        g_valid = g_valid.sort_values('datetime')
+        vnorm   = g_valid['armSpeed'] / g_valid['armSpeed'].max()
+        curves.append(vnorm.reset_index(drop=True))
+
+    if curves:
+        mat    = pd.concat(curves,axis=1)
+        last_n = min(10, mat.shape[1]); mat10 = mat.iloc[:,-last_n:]
+        mean   = mat.mean(axis=1); q1 = mat.quantile(0.25,axis=1); q3 = mat.quantile(0.75,axis=1)
+        m10    = mat10.mean(axis=1); q1_10 = mat10.quantile(0.25,axis=1); q3_10 = mat10.quantile(0.75,axis=1)
+        idx    = np.arange(1, len(mean)+1)
+        fig, ax = plt.subplots()
+        ax.plot(idx, mean, 'k-', lw=2, label='Mean (hist)')
+        ax.fill_between(idx, q1, q3, alpha=0.3, label='IQR (hist)')
+        ax.plot(idx, m10, 'r-', lw=2, label='Mean (last10)')
+        ax.fill_between(idx, q1_10, q3_10, alpha=0.3, color='r', label='IQR (last10)')
+        ax.axhline(NLINE, ls='--', label='95% threshold')
+        ax.set_xlabel('Throw #'); ax.set_ylabel('Velocity / Vmax')
+        ax.set_title(f'{player} – Pulse Arm Speed Decay (n={mat.shape[1]})')
+        ax.legend(loc='lower right'); plt.tight_layout(); plt.show()
+    else:
+        print(f'No qualifying velocity-decay sessions for {player}')
+
+    # —— 8B) In-Game Fastball Velocity Decay Plot (absolute velocity) ——
+    try:
+        plot_absolute_velocity_decay(df_pulse, player)
+    except Exception as e:
+        print(f'Could not plot in-game velocity decay for {player}: {e}')
+
+    # —— 9) In-session Arm Slot Decay (mean±IQR) ——————————
+    sessions_slot = []
+    for date, g in raw_all.groupby('date_corr'):
+        if g['armSpeed_imp'].isna().any(): continue
+        if not (QUAL_MIN < len(g) < QUAL_MAX): continue
+        if (g['armSpeed_imp'] >= pct75_by[player]).sum() == 0: continue
+        g2 = g.sort_values('datetime')
+        sessions_slot.append(g2['armSlot'].reset_index(drop=True))
+    if sessions_slot:
+        mat2    = pd.concat(sessions_slot, axis=1)
+        last_n  = min(10, mat2.shape[1]); m10s = mat2.iloc[:,-last_n:]
+        mean_s  = mat2.mean(axis=1); q1s   = mat2.quantile(0.25,axis=1); q3s   = mat2.quantile(0.75,axis=1)
+        m10_s   = m10s.mean(axis=1); q1_10s = m10s.quantile(0.25,axis=1); q3_10s = m10s.quantile(0.75,axis=1)
+        idx     = np.arange(1, len(mean_s)+1)
+        fig, ax = plt.subplots()
+        ax.plot(idx, mean_s, 'k-', lw=2, label='Mean hist')
+        ax.fill_between(idx, q1s, q3s, alpha=0.3, label='IQR hist')
+        ax.plot(idx, m10_s, 'r-', lw=2, label='Mean last10')
+        ax.fill_between(idx, q1_10s, q3_10s, alpha=0.3, color='r', label='IQR last10')
+        ax.set_xlabel('Throw #'); ax.set_ylabel('Arm Slot')
+        ax.set_title(f'{player} – Pulse Arm Slot Decay')
+        ax.legend(loc='lower right'); plt.tight_layout(); plt.show()
+    else:
+        print(f'No qualifying arm-slot sessions for {player}')
+
+    # —— 10) In-session Shoulder Rotation Decay (mean±IQR) —————
+    sessions_rot = []
+    for date,g in raw_all.groupby('date_corr'):
+        if g['armSpeed_imp'].isna().any(): continue
+        if not (QUAL_MIN < len(g) < QUAL_MAX): continue
+        if (g['armSpeed_imp'] >= pct75_by[player]).sum() == 0: continue
+        g2 = g.sort_values('datetime')
+        sessions_rot.append(g2['shoulderRotation'].reset_index(drop=True))
+    if sessions_rot:
+        mat3    = pd.concat(sessions_rot, axis=1)
+        last_nr = min(10, mat3.shape[1]); m10r = mat3.iloc[:,-last_nr:]
+        mean_r  = mat3.mean(axis=1); q1r = mat3.quantile(0.25,axis=1); q3r = mat3.quantile(0.75,axis=1)
+        m10_r   = m10r.mean(axis=1); q1_10r = m10r.quantile(0.25,axis=1); q3_10r = m10r.quantile(0.75,axis=1)
+        idx     = np.arange(1, len(mean_r)+1)
+        fig, ax = plt.subplots()
+        ax.plot(idx, mean_r, 'k-', lw=2, label='Mean hist')
+        ax.fill_between(idx, q1r, q3r, alpha=0.3, label='IQR hist')
+        ax.plot(idx, m10_r, 'r-', lw=2, label='Mean last10')
+        ax.fill_between(idx, q1_10r, q3_10r, alpha=0.3, color='r', label='IQR last10')
+        ax.set_xlabel('Throw #'); ax.set_ylabel('Shoulder Rotation')
+        ax.set_title(f'{player} – Pulse Shoulder Rotation Decay')
+        ax.legend(loc='lower right'); plt.tight_layout(); plt.show()
+    else:
+        print(f'No qualifying rot-decay sessions for {player}')
+
+    # ─── 10B) Release-Height & Extension plots (fastballs only) ───────────
+    from scipy.ndimage import uniform_filter1d
+    import matplotlib.cm as cm
+
+    def _decay_plot_with_last(mat, metric_lbl, player_lbl, fb, metric_col):
+        # compute hist & last-10 stats
+        last_n = min(10, mat.shape[1])
+        mat10 = mat.iloc[:, -last_n:]
+        mean = uniform_filter1d(mat.mean(axis=1).values, 3)
+        m10 = uniform_filter1d(mat10.mean(axis=1).values, 3)
+        q1 = uniform_filter1d(mat.quantile(.25, axis=1).values, 3)
+        q3 = uniform_filter1d(mat.quantile(.75, axis=1).values, 3)
+        q1_10 = uniform_filter1d(mat10.quantile(.25, axis=1).values, 3)
+        q3_10 = uniform_filter1d(mat10.quantile(.75, axis=1).values, 3)
+        idx = np.arange(1, len(mean) + 1)
+
+        fig, ax = plt.subplots()
+        ax.plot(idx, mean, "k-", lw=2, label="Mean (hist)")
+        ax.fill_between(idx, q1, q3, alpha=.30, label="IQR (hist)")
+        ax.plot(idx, m10, "#00FF00", lw=2, label="Mean (last-10)")
+        ax.fill_between(idx, q1_10, q3_10, alpha=.30, color="green", label="IQR (last-10)")
+
+        # add last-game raw curve
+        last_date = fb['date_corr'].max()
+        g_last = fb[fb['date_corr'] == last_date].sort_values("DATE_TIME")
+        if not g_last.empty:
+            last_curve = g_last[metric_col].reset_index(drop=True)
+            idx_last = np.arange(1, len(last_curve) + 1)
+            ax.plot(idx_last, last_curve, "b--", lw=2, label=f"Last Game ({last_date})")
+
+        ax.set_xlabel("Throw #")
+        ax.set_ylabel(metric_lbl)
+        ax.set_title(f"{player_lbl} – {metric_lbl} In-Game Decay (n={mat.shape[1]})")
+        ax.legend(loc="lower right")
+        plt.tight_layout(); plt.show()
+
+    # subset & plotting
+    fb = _fastball_subset(df_pulse, player)
+    if fb.empty:
+        print(f"No Pulse fastball data for {player}")
+    else:
+        for metric, metric_lbl in [("REL_HEIGHT", "Release Height (ft)"),
+                                  ("EXTENSION",  "Extension (ft)")]:
+            curves = [
+                g.sort_values("DATE_TIME")[metric].reset_index(drop=True)
+                for _, g in fb.groupby("date_corr")
+            ]
+            if curves:
+                mat = pd.concat(curves, axis=1).ffill().bfill()
+                _decay_plot_with_last(mat, metric_lbl, player, fb, metric)
+        # scatter plots remain unchanged
+        _scatter_plot(fb, "REL_HEIGHT", "Release Height (ft)", player)
+        _scatter_plot(fb, "EXTENSION",  "Extension (ft)",      player)
+        _scatter_plot(fb, "VELOCITY",   "Velocity (mph)",      player)
+
+
+    # ─────────────── NEW 4-pie comparison figure ───────────────
+    tot_player  = len(raw_all)
+    game_player = raw_all['tag'].str.contains('Game', na=False).sum()
+    is_bp = df_pulse['COUNT'].isna() | (df_pulse['COUNT'].astype(str).str.strip() == '')
+    bp_player = ((df_pulse['converted_name'] == player) & is_bp).sum()
+    prog_player = max(tot_player - game_player, 0)
+
+    p50, p75, p90 = pct50_by[player], pct75_by[player], pct90_by[player]
+    spd = raw_all['armSpeed_imp']
+    band_counts = [
+        (spd <  p50).sum(),
+        ((spd >= p50) & (spd < p75)).sum(),
+        ((spd >= p75) & (spd < p90)).sum(),
+        (spd >= p90).sum()
+    ]
+
+    tot_all   = len(df_raw)
+    game_all  = df_raw['tag'].str.contains('Game', na=False).sum()
+    bp_all    = is_bp.sum()
+    prog_all  = max(tot_all - game_all, 0)
+    all_spd   = df_raw['armSpeed_imp']
+    p50_all, p75_all, p90_all = (
+        np.nanpercentile(all_spd, 50),
+        np.nanpercentile(all_spd, 75),
+        np.nanpercentile(all_spd, 90)
+    )
+    band_counts_all = [
+        (all_spd <  p50_all).sum(),
+        ((all_spd >= p50_all) & (all_spd < p75_all)).sum(),
+        ((all_spd >= p75_all) & (all_spd < p90_all)).sum(),
+        (all_spd >= p90_all).sum()
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+    plt.subplots_adjust(wspace=.25, hspace=.25)
+    colors1 = ['red', '#FFFF99', 'royalblue']
+    colors2 = ['royalblue', '#FFFF99', 'salmon', 'crimson']
+
+    axes[0,0].pie(
+        [game_player, bp_player, prog_player],
+        labels=['Game', 'Bullpen', 'Throw Prog'],
+        autopct='%1.0f%%', colors=colors1, startangle=90
+    )
+    axes[0,0].set_title(f'{player}\nThrow-Type Distribution')
+
+    axes[0,1].pie(
+        band_counts,
+        labels=['0-50th', '50-75th', '75-90th', '≥90th'],
+        autopct='%1.0f%%', colors=colors2, startangle=90
+    )
+    axes[0,1].set_title(f'{player}\nArm-Speed Percentiles')
+
+    axes[1,0].pie(
+        [game_all, bp_all, prog_all],
+        labels=['Game', 'Bullpen', 'Throw Prog'],
+        autopct='%1.0f%%', colors=colors1, startangle=90
+    )
+    axes[1,0].set_title('ALL Pitchers\nThrow-Type Distribution')
+
+    axes[1,1].pie(
+        band_counts_all,
+        labels=['0-50th', '50-75th', '75-90th', '≥90th'],
+        autopct='%1.0f%%', colors=colors2, startangle=90
+    )
+    axes[1,1].set_title('ALL Pitchers\nArm-Speed Percentiles')
+
+    fig.suptitle('Throw-Type vs. Intensity Mix\n(Individual vs. Population)', fontsize=14)
+    plt.show()
+
+    # ——— 11) Last-10-day summary table ————————————————
+    end_date = raw_all['date_corr'].max()
+    last10   = pd.date_range(end_date - pd.Timedelta(days=9), end_date).date
+
+    rows = []
+    for d in last10:
+        flag    = flag90.get(d, None)
+        recWL   = wl_p[wl_p['date'] == d]
+        tot_val = recWL['wl_total_throws'].iat[0] if not recWL.empty else np.nan
+        tot     = int(tot_val) if np.isfinite(tot_val) else np.nan
+        avg_velo, max_velo = game_fastball_stats(df_pulse, player, d)
+        raw_tot = (
+            summary.loc[summary['date']==d, 'raw_total']
+            .iat[0] if d in summary['date'].values else 0
+        )
+        raw_hi  = (
+            summary.loc[summary['date']==d, 'raw_high_intent']
+            .iat[0] if d in summary['date'].values else 0
+        )
+        mismatch = (pd.notna(tot) and raw_tot != tot)
+        next_g   = int(
+            game_p.loc[game_p['date']==(d + datetime.timedelta(days=1)), 'game_throws'].sum()
+        )
+        hi_int   = raw_hi + next_g * mismatch
+
+        real_meas = raw_all.loc[
+            (raw_all['date_corr'] == d) & raw_all['armSpeed'].notna(),
+            'armSpeed'
+        ]
+        spd_for_score = raw_all.loc[
+            (raw_all['date_corr'] == d) & raw_all['armSpeed_imp'].notna(),
+            'armSpeed_imp'
+        ].mean()
+        game_today = int(
+            game_p.loc[game_p['date'] == d, 'game_throws'].sum()
+        )
+
+        rows.append({
+            'Date'            : pd.to_datetime(d),
+            'Total Throws'    : tot,
+            'Hi-Intent'       : raw_hi,
+            'Avg Velo'        : avg_velo,
+            'Max Velo'        : max_velo,
+            'ACWR'            : acwr_map.get(pd.Timestamp(d), np.nan),
+            'Avg Arm Speed'   : real_meas.mean() if not real_meas.empty else np.nan,
+            'Peak Arm Speed'  : real_meas.max()  if not real_meas.empty else np.nan,
+            'Game'            : 'Y' if game_today > 0 else 'N',
+            '⚠️ no 90th'      : '⚠️' if (flag is not None and flag >= 3) else '',
+            'spd_metric'      : spd_map.get(pd.Timestamp(d), np.nan),
+            'intent_score'    : intent_map.get(pd.Timestamp(d), np.nan)
+        })
+
+    df11 = pd.DataFrame(rows)
+    df11['Days Rest'] = df11['Date'].map(
+        daily.set_index('date')['days_since_game']
+    )
+    df11['Total Throws'] = df11['Total Throws'].fillna(0)
+    df11['Hi-Intent']    = df11['Hi-Intent'].fillna(0)
+
+    red_white_red = mpl.colors.LinearSegmentedColormap.from_list(
+        'red_white_red', ['red','white','red']
+    )
+
+    # pull the readiness scores from the final daily_dict version
+    # **Only Tank** is kept.  Rename to “READINESS.”
+    ready_map   = daily_dict[player][['tank_readiness_v2']]
+    df11['READINESS'] = df11['Date'] \
+        .map(ready_map['tank_readiness_v2']) \
+        .fillna(100.0)
+
+    # ------------------------------------------------------------------
+    #  SCORING BLOCK  – continuum scaling  +  new weights
+    #           • volume / intent : 10th → 90th pct
+    #           • velocity        : min → 90th pct   (still continuous)
+    # ------------------------------------------------------------------
+    work_vol = df11['Total Throws'] > 0
+    work_hi  = df11['Hi-Intent']    > 0
+    work_spd = df11['spd_metric'].notna()
+
+    vol90 = df11.loc[work_vol, 'Total Throws'].quantile(.90)
+    vol90 = vol90 if vol90 > 0 else 1
+    vol10 = df11.loc[work_vol, 'Total Throws'].quantile(.10)
+    hi10, hi90 = df11.loc[work_hi, 'Hi-Intent'].quantile([.10, .90])
+
+    spd_min = df11.loc[work_spd, 'spd_metric'].min()
+    spd90   = df11.loc[work_spd, 'spd_metric'].quantile(.90)
+
+    vol_den = max(vol90 - vol10, 1)
+    hi_den  = max(hi90  - hi10 , 1)
+    spd_den = max(spd90 - spd_min, 1)
+
+    df11['vol_score'] = (df11['Total Throws'] / vol90).clip(0, 1)
+    spd_raw           = ((df11['spd_metric'] - spd_min) / spd_den).clip(0, 1)
+    df11['speed_score'] = (0.25 + 0.75 * spd_raw).fillna(0)
+
+    df11['game_bonus'] = (df11['Game'] == 'Y').astype(int) * 0.10
+
+    df11['composite'] = (
+          0.50 * df11['vol_score']
+        + 0.35 * df11['intent_score']
+        + 0.25 * df11['speed_score']
+        +        df11['game_bonus']
+    ).clip(0, 1)
+
+    df11['WL'] = pd.cut(
+        df11['composite'],
+        bins=[-0.01, 0.40, 0.75, 1.01],
+        labels=['Low', 'Medium', 'High'],
+        include_lowest=True,
+        right=False
+    )
+
+    # ───────────────────────────────────────────────────────────────────
+    # Now format & style the DataFrame
+    col_fmt = {
+        'Total Throws'    : '{:.0f}',
+        'Hi-Intent'       : '{:.0f}',
+        'Days Rest'       : '{:.0f}',
+        'Avg Velo'        : '{:.1f}',
+        'Max Velo'        : '{:.1f}',
+        'Avg Arm Speed'   : '{:.1f}',
+        'Peak Arm Speed'  : '{:.1f}',
+        'ACWR'            : '{:.2f}',
+        'READINESS'       : '{:.2f}',
+    }
+    wl_colors = {'High': 'crimson', 'Medium': '#FFFF99', 'Low': 'royalblue'}
+    def wl_bg(val):
+        return f'background-color:{wl_colors.get(val, "")}'
+    def game_bg(val):
+        return 'background-color:red;color:white' if val == 'Y' else ''
+
+    col_order = [
+        'Date',
+        'Total Throws',
+        'Hi-Intent',
+        'Game',
+        'Days Rest',
+        'WL',
+        'Avg Velo',
+        'Max Velo',
+        'ACWR',
+        'READINESS',        # renamed here
+        'Avg Arm Speed',
+        'Peak Arm Speed',
+        '⚠️ no 90th',
+        'spd_metric',
+        'vol_score',
+        'intent_score',
+        'speed_score',
+        'game_bonus',
+        'composite'
+    ]
+    df11 = df11[col_order]
+
+    df11['Date'] = pd.to_datetime(df11['Date']).dt.strftime('%Y-%m-%d')
+
+    styled = (
+        df11.style
+            .format(col_fmt, na_rep='-')
+            .map(wl_bg, subset=['WL'])
+            .map(game_bg, subset=['Game'])
+            .background_gradient(
+                cmap=red_white_red,
+                vmin=0.8, vmax=1.3,
+                subset=['ACWR']
+            )
+            .background_gradient(
+                cmap=bwr_custom,
+                subset=[
+                    'Total Throws', 'Hi-Intent',
+                    'Avg Velo', 'Max Velo',
+                    'Avg Arm Speed', 'Peak Arm Speed',
+                    'READINESS'
+                ]
+            )
+            .set_properties(subset=['⚠️ no 90th'], **{'font-size':'18px'})
+            .set_properties(**{'text-align':'center'})
+    )
+    display(styled)
+
+    # ── Velocity-cycle report (load vs deload) ───────────────────────
+    load_cycle_report(daily.set_index('date'),
+                  player,
+                  short_win=7,
+                  long_win=28,
+                  smooth_gap=True,        # activate the extra smoothing
+                  gap_smooth_win=7)       # 7-day MA of the gap itself
+
+# ─────────────────────────────────────────────────────────────
+# Helper – outing-level history for READINESS
+# ─────────────────────────────────────────────────────────────
+def _build_outing_rows(pitcher):
+    daily_p    = daily_dict[pitcher]
+    game_dates = daily_p.index[daily_p['is_game']]
+
+    if game_dates.empty:
+        cols = [
+            'date',
+            'avg_velo', 'max_velo',
+            'days_rest', 'acwr_last',
+            'last_day_label', 'last_avg_spd',
+            'pattern_gap', 'tot_thr_between',
+            'hi_ratio_between', 'sum_var_between',
+            'avg_sp_between', 'p90_sp_between',
+            'success'
+        ]
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for d in game_dates:
+        avg_v, max_v = game_fastball_stats(df_pulse, pitcher, d)
+        pos = daily_p.index.get_loc(pd.to_datetime(d))
+
+        # 1) days_rest
+        if pos == 0:
+            rest = 0
+        else:
+            raw  = daily_p['days_since_game'].iat[pos - 1]
+            rest = 0 if pd.isna(raw) else int(raw)
+
+        # 2) acwr_last, last_day_label, last_avg_spd
+        if pos == 0:
+            acwr_last = np.nan
+            last_lbl  = 'NA'
+            last_spd  = np.nan
+        else:
+            prev       = daily_p.iloc[pos - 1]
+            acwr_last  = prev['acwr']
+            last_lbl   = prev['label']
+            last_spd   = prev['spd_metric']
+
+        # 3) pattern_gap
+        lbl_str   = daily_p['label'].astype(str).replace('nan', '')
+        start_ix  = max(0, pos - rest)
+        seq       = lbl_str.iloc[start_ix:pos].tolist()
+        seq       = [s.replace('Medium','MED').replace('Low','LOW') for s in seq if s]
+        pattern   = '-'.join(seq) if seq else 'NA'
+
+        # 4) between-segment stats
+        seg      = daily_p['segment'].iat[pos]
+        prev_seg = between_dict[pitcher].query("segment == @seg - 1")
+        if prev_seg.empty:
+            tot_thr = np.nan
+            hi_rat  = np.nan
+            sum_var = np.nan
+            avg_sp  = np.nan
+            p90_sp  = np.nan
+        else:
+            b        = prev_seg.squeeze()
+            tot_thr  = b['total_throws_β']
+            hi_rat   = b['hi_ratio_β']
+            sum_var  = b['sum_variation']
+            avg_sp   = b['avg_speed']
+            p90_sp   = b['p90_speed']
+
+        rows.append({
+            'date'             : d,
+            'avg_velo'         : avg_v,
+            'max_velo'         : max_v,
+            'days_rest'        : rest,
+            'acwr_last'        : acwr_last,
+            'last_day_label'   : last_lbl,
+            'last_avg_spd'     : last_spd,
+            'pattern_gap'      : pattern,
+            'tot_thr_between'  : tot_thr,
+            'hi_ratio_between' : hi_rat,
+            'sum_var_between'  : sum_var,
+            'avg_sp_between'   : avg_sp,
+            'p90_sp_between'   : p90_sp
+        })
+
+    out = pd.DataFrame(rows)
+
+    # ⮕ force those four columns to float (no more “object” dtype)
+    for col in ['days_rest','acwr_last','tot_thr_between','hi_ratio_between']:
+        out[col] = pd.to_numeric(out[col], errors='coerce')
+
+    # Compute “success” as before
+    if not out['avg_velo'].dropna().empty:
+        thr = np.nanpercentile(out['avg_velo'], 80)
+        out['success'] = (out['avg_velo'] >= thr).astype(int)
+    else:
+        out['success'] = 0
+
+    return out
+
+# ─────────────────────────────────────────────────────────────
+# Helper 1 – arrow glyph for 7-day velo trend vs 30-day window
+# ─────────────────────────────────────────────────────────────
+def _velo_arrow(v7, v30):
+    if pd.isna(v7) or pd.isna(v30):
+        return ''
+    if v7 > v30:
+        return ' ▲'
+    if v7 < v30:
+        return ' ▼'
+    return ' •'
+
+# ─────────────────────────────────────────────────────────────
+# Helper 2 – italic-bold style for HI/Total % > 30 %
+# ─────────────────────────────────────────────────────────────
+def _hi_percent_style(val):
+    try:
+        if float(val.split('%')[0]) > 30:
+            return 'font-style:italic;font-weight:bold;color:red'
+    except Exception:
+        pass
+    return ''
+
+# ─────────────────────────────────────────────────────────────
+# Helper 3 – data-bar NG% (red → white) à la Excel
+# ─────────────────────────────────────────────────────────────
+def _ng_game_bar(val, red='#d73027'):
+    """
+    Cell contains something like '78% / 22%'   (NG% / Game%)
+    We paint a **gradient data-bar** from red→white whose length = NG%.
+    """
+    try:
+        ng_pct = float(val.split('/')[0].replace('%', '').strip())
+        return (f'background:linear-gradient(to right,'
+                f'{red} 0%,{red} {ng_pct}%,'
+                f'white {ng_pct}%,white 100%);')
+    except Exception:
+        return ''
+
+# ─────────────────────────────────────────────────────────────
+# Helper 4 – mean fastball velo (same rules as decay plots)
+#           • COUNT *not* empty (game only)
+#           • keep  FA (+ SI) or SI or FC
+# ─────────────────────────────────────────────────────────────
+_FASTBALL_TYPES = {'FA', 'SI', 'FC'}
+
+def _mean_fb_vel(df, name, start_date):
+    sub = df.loc[
+        (df['converted_name'] == name) &
+        (df['date_corr']      >= start_date) &
+        (df['COUNT'].notna()) & (df['COUNT'] != '')
+    ]
+    if sub.empty:
+        return np.nan
+
+    avail = _FASTBALL_TYPES & set(sub['PITCH_TYPE'].unique())
+    if not avail:
+        return np.nan
+
+    if 'FA' in avail:
+        keep = {'FA', 'SI'} if 'SI' in avail else {'FA'}
+    else:
+        keep = {'SI'} if 'SI' in avail else {'FC'}
+
+    fb = sub[sub['PITCH_TYPE'].isin(keep)]
+    return fb['VELOCITY'].mean() if not fb.empty else np.nan
+
+# -------------------------------------------------------------------
+# Helpers for comparative_report()
+# -------------------------------------------------------------------
+def _off_days(name, start_date, end_date):
+    """How many days in [start_date .. end_date] have zero throws?"""
+    # all calendar days in window
+    alldays = pd.date_range(start_date, end_date, freq='D').date
+
+    # any throw recorded in df_raw marks the day as 'on‑throwing'
+    mask = (df_raw['pitcher'] == name) & \
+           (df_raw['date_corr'].between(start_date, end_date))
+    ondays = set(df_raw.loc[mask, 'date_corr'])
+
+    return len(alldays) - len(ondays)
+
+
+def _bullpen_throws(name, start_date):
+    """Total # of bullpen throws in df_pulse since start_date."""
+    is_bp = df_pulse['COUNT'].isna() | \
+            (df_pulse['COUNT'].astype(str).str.strip() == '')
+    mask = (df_pulse['converted_name'] == name) & \
+           (df_pulse['date_corr'] >= start_date) & is_bp
+    return df_pulse.loc[mask].shape[0]
+
+
+# ─────────────────────────────────────────────────────────────
+# NEW comparative_report()
+# ─────────────────────────────────────────────────────────────
+def comparative_report():
+    clear_output(wait=True)
+    print("=== Comparative 7/15/30-day Summary ===\n")
+
+    today    = df_raw['date_corr'].max()
+    windows  = [7, 15, 30]
+
+    comp_rows = []
+    for p in pitchers:
+        row = {'Pitcher': p}
+        _ = _calibrate_rest_acwr(p)   # necessary so tank parameters get computed
+
+        for w in windows:
+            cutoff  = today - pd.Timedelta(days=w-1)
+            mask_raw = (df_raw['pitcher'] == p) & (df_raw['date_corr'] >= cutoff)
+            total   = df_raw.loc[mask_raw].shape[0]
+            hi      = df_raw.loc[mask_raw &
+                              (df_raw['armSpeed_imp'] >= pct75_by[p])].shape[0]
+            row[f'Throws {w}d']    = total
+            row[f'Hi-Intent {w}d'] = hi
+
+            row[f'Batters Faced {w}d'] = df_pulse.loc[
+                (df_pulse['converted_name'] == p) &
+                (df_pulse['date_corr']      >= cutoff) &
+                (df_pulse['COUNT']           == 0)
+            ].shape[0]
+
+            row[f'HI/Total % {w}d'] = f"{(hi/total*100):.0f}%" if total else "0%"
+            game_sum = game_group.loc[
+                (game_group['pitcher'] == p) &
+                (game_group['date']    >= cutoff),
+                'game_throws'
+            ].sum()
+            non_game = total - game_sum
+            row[f'Game Throws {w}d'] = game_sum
+            if total:
+                ng_pct = non_game / total * 100
+                gm_pct = game_sum  / total * 100
+                row[f'NG/Game % {w}d'] = f"{ng_pct:.0f}% / {gm_pct:.0f}%"
+            else:
+                row[f'NG/Game % {w}d'] = "0% / 0%"
+
+            row[f'Avg FB Vel {w}d'] = _mean_fb_vel(df_pulse, p, cutoff)
+            row[f'Off Days {w}d'] = _off_days(p, cutoff, today)
+            row[f'Bullpen {w}d']    = _bullpen_throws(p, cutoff)
+
+        comp_rows.append(row)
+
+    comp_df = pd.DataFrame(comp_rows)
+    desired = []
+    for w in windows:                      # order inside each window
+        desired += [
+            f'Throws {w}d',
+            f'Hi-Intent {w}d',
+            f'Game Throws {w}d',
+            f'Bullpen {w}d',
+            f'Batters Faced {w}d',
+            f'HI/Total % {w}d',
+            f'NG/Game % {w}d',
+            f'Avg FB Vel {w}d',
+            f'Off Days {w}d'
+        ]
+
+    comp_df = comp_df[['Pitcher'] + desired].copy()
+    display_df = comp_df.copy()            # <- used later for styling
+
+    # (keep the little velocity‑arrow tweak for 7‑day col)
+    display_df['Avg FB Vel 7d'] = display_df.apply(
+        lambda r: (f"{r['Avg FB Vel 7d']:.2f}"
+                   f"{_velo_arrow(r['Avg FB Vel 7d'], r['Avg FB Vel 30d'])}")
+                  if pd.notna(r['Avg FB Vel 7d']) else "-",
+        axis=1
+    )
+
+    sty = display_df.style
+    for col in comp_df.columns:
+        if col == 'Avg FB Vel 7d':
+            continue
+        if any(k in col for k in ['Throws', 'Bullpen', 'Off Days',
+                                  'Hi-Intent', 'Batters Faced', 'Avg FB Vel']):
+            vmin, vmax = comp_df[col].min(), comp_df[col].max()
+            sty = sty.background_gradient(
+                cmap=bwr_custom, subset=[col], vmin=vmin, vmax=vmax
+            )
+
+    for col in [f'NG/Game % {w}d' for w in windows]:
+        sty = sty.applymap(_ng_game_bar, subset=[col])
+
+    for col in [f'HI/Total % {w}d' for w in windows]:
+        sty = sty.applymap(_hi_percent_style, subset=[col])
+
+    num_cols = comp_df.select_dtypes(include='number').columns
+    fmt = {c: '{:.0f}' for c in num_cols if 'Avg FB Vel' not in c}
+    for c in ['Avg FB Vel 15d', 'Avg FB Vel 30d']:
+        if c in num_cols:
+            fmt[c] = '{:.2f}'
+    fmt.pop('Avg FB Vel 7d', None)
+    sty = sty.format(fmt, na_rep='-')
+
+    thick_rules = []
+
+    # a) after Pitcher name
+    thick_rules.append({
+        'selector': 'td.col0, th.col_heading.level0.col0',
+        'props'   : [('border-right', '4px solid black')]
+    })
+
+    # b) after every “Off Days Xd” column
+    for w in windows:
+        c = f'Off Days {w}d'
+        if c in comp_df.columns:
+            col_id = comp_df.columns.get_loc(c)
+            thick_rules.append({
+                'selector': f'td.col{col_id}',
+                'props'   : [('border-right', '4px solid black')]
+            })
+            thick_rules.append({
+                'selector': f'th.col_heading.level0.col{col_id}',
+                'props'   : [('border-right', '4px solid black')]
+            })
+
+    # c) bottom border under header row
+    thick_rules.append({
+        'selector': 'thead th',
+        'props'   : [('border-bottom', '4px solid black')]
+    })
+
+    # d) outside border of the whole table
+    thick_rules.append({
+        'selector': 'table',
+        'props'   : [('border', '4px solid black'),
+                     ('border-collapse', 'collapse')]
+    })
+
+    sty = (sty.set_properties(**{'text-align': 'center'})
+              .set_table_styles(
+                  [{'selector': 'th',
+                    'props'   : [('position', 'sticky'),
+                                 ('top', '0'),
+                                 ('background-color', '#FFF')]}]
+                  + thick_rules,
+                  overwrite=False)
+          )
+
+    display(sty)
+
+# ────────────────────────────────────────────────────────────────
+# Tank v2  – includes ACWR, rest-quota, composite bonus/penalty
+# ────────────────────────────────────────────────────────────────
+SEASON_CUTOFF = (4, 1)          # 1 Apr
+
+def _calibrate_rest_acwr(pitcher):
+    """
+    Returns
+    -------
+    opt_rest : int        – median rest-days (floor = 2) when velo ≥ 90th-pct
+    acwr_lo  : float      – minimum ACWR that still produced velo ≥ 80th-pct
+    acwr_hi  : float      – maximum ACWR that still produced velo ≥ 80th-pct
+    """
+    outings = _build_outing_rows(pitcher)
+    if outings.empty:
+        # sensible, conservative fall-backs
+        return 5, 0.80, 1.30
+
+    # ── keep only in-season games (after 1 Apr) ───────────────────────
+    def _after_cutoff(ts):
+        return (ts.month, ts.day) >= SEASON_CUTOFF
+
+    data = outings[outings['date'].apply(_after_cutoff)]
+    if data.empty:                       # all spring games? – then use all
+        data = outings
+
+    # ── 1) Optimal REST (median of velo ≥ 90th-pct & rest ≥ 2 d) ──────
+    v90 = data['avg_velo'].quantile(.90)
+    rest_pool = data.loc[(data['avg_velo'] >= v90) & (data['days_rest'] >= 2),
+                         'days_rest']
+    opt_rest = rest_pool.median()
+    if np.isnan(opt_rest):               # too few outings
+        opt_rest = data['days_rest'].median()
+    opt_rest = max(int(round(opt_rest)), 2)   # hard floor = 2
+
+    # ── 2) ACWR **range** for outings with velo ≥ 80th-pct ────────────
+    v80        = data['avg_velo'].quantile(.80)
+    acwr_pool  = data.loc[data['avg_velo'] >= v80, 'acwr_last'].dropna()
+
+    if acwr_pool.empty:
+        # fall back to overall median ±0.05, or classic 0.8–1.3 window
+        mid = data['acwr_last'].median()
+        if np.isnan(mid):
+            acwr_lo, acwr_hi = 0.80, 1.30
+        else:
+            acwr_lo = max(mid - 0.05, 0)   # keep it positive
+            acwr_hi = mid + 0.05
+    else:
+        acwr_lo = acwr_pool.min()
+        acwr_hi = acwr_pool.max()
+
+    return opt_rest, float(acwr_lo), float(acwr_hi)
+
+
+def simulate_tank_v2(daily_df, pitcher,
+                     acwr_weight=10,
+                     comp_weight =  6,
+                     base_floor=10):
+
+    # ── 1) pitcher-specific parameters ─────────────────────────
+    # 1) get rest-day target and ACWR range
+    opt_rest, acwr_lo, acwr_hi = _calibrate_rest_acwr(pitcher)
+
+    # 2) pick a single “target ACWR” to steer the tank toward
+    opt_acwr = 0.5 * (acwr_lo + acwr_hi)     # midpoint of the range
+    base = 100.0 / opt_rest                    # pts added per full rest day
+    tank, no90 = 100.0, 0
+    ready = []
+
+    # ── 2) iterate one calendar day at a time ─────────────────
+    for _, row in daily_df.iterrows():
+
+        # ── 2 A) GAME DAY  ⇒ empty the tank ───────────────────
+        if row.is_game:
+            tank = 0.0                         # ← THE ONLY REAL CHANGE
+            no90 = 0
+
+        # ── NON-GAME DAY ───────────────────────────────────────────
+        else:
+            # 1) unconditional recharge proportional to how light the day was
+            rest_factor = 1 - row['vol_score']          # 1.0 → 0 throws, 0 → vol90
+            tank += base * rest_factor
+
+            # 2) small composite nudge (max ±½ base)
+            delta = (0.50 - row['composite'])           #  + when easy, − when heavy
+            tank += comp_weight * delta                 # range ≈ ±10
+
+            # 3) ACWR correction (max ±½ base)
+            if not np.isnan(row.acwr):
+                tank += acwr_weight * (opt_acwr - row.acwr)
+
+            # 4) “no-90th” fatigue after 3 straight days
+            got90 = (row.hi_ratio >= 0.10)
+            no90  = 0 if got90 else no90 + 1
+            if no90 >= 3:
+                tank -= base * 0.50                      # half a rest-day’s worth
+
+        tank = np.clip(tank, base_floor, 100)
+        ready.append(tank)
+
+    daily_df['tank_readiness_v2'] = ready
+    return daily_df
+
+# ----------------------------------------
+# 3) PER-PITCHER: build daily_dict & between_dict
+# ----------------------------------------
+daily_dict   = {}
+between_dict = {}
+
+for p in pitchers:
+    summary = raw_group[raw_group['pitcher']==p]
+    raw_all = df_raw[df_raw['pitcher']==p]
+    wl_p    = wl_df[wl_df['pitcher']==p]
+    game_p  = game_group[game_group['pitcher']==p]
+
+    daily_tmp = (
+        wl_p.rename(columns={'wl_total_throws':'total_throws'})
+            .merge(summary[['date','raw_total','raw_high_intent']], on='date', how='left')
+            .fillna({'raw_total':0,'raw_high_intent':0})
+            .sort_values('date')
+    )
+
+    spd_series = raw_all.groupby('date_corr')['armSpeed_imp'].mean()
+    daily_tmp['spd_metric'] = daily_tmp['date'].map(spd_series)
+    daily_tmp['next_game']  = daily_tmp['date'].map(game_p.set_index('date')['game_throws']).fillna(0)
+    daily_tmp['date']       = pd.to_datetime(daily_tmp['date'])
+    daily_tmp = daily_tmp.set_index('date')
+    daily_tmp['date']       = daily_tmp.index
+    game_dates = pd.to_datetime(game_p['date'])          # actual game days
+    daily_tmp['is_game']    = daily_tmp.index.normalize().isin(game_dates)
+    daily_tmp['next_game']  = daily_tmp['is_game'].shift(-1).fillna(False).astype(int)
+    daily_tmp['segment']    = daily_tmp['is_game'].cumsum()
+    last_game = daily_tmp.index.to_series().where(daily_tmp['is_game']).ffill()
+    daily_tmp['days_since_game'] = (daily_tmp.index.to_series() - last_game).dt.days
+    MAX_BEFORE_FIRST_GAME = 10
+    daily_tmp['days_since_game'] = (
+        daily_tmp['days_since_game']
+            .fillna(MAX_BEFORE_FIRST_GAME)
+            .astype(int)
+    )
+    daily_tmp.loc[daily_tmp['is_game'], 'days_since_game'] = 0
+    v10, v90 = daily_tmp['total_throws'].quantile([.10, .90])
+    v90 = v90 if v90 > 0 else 1
+    daily_tmp['label'] = pd.cut(
+        daily_tmp['total_throws'],
+        bins=[-1, v10, v90, np.inf],
+        labels=['Low', 'Medium', 'High']
+    )
+
+    # temporarily all NaN; we’ll fill acwr later
+    daily_tmp['acwr'] = np.nan
+
+    btmp = (
+        daily_tmp.groupby('segment')
+                 .apply(lambda g: pd.Series({
+                     'segment': g['segment'].iat[0],
+                     'avg_speed': g['spd_metric'].mean(),
+                     'p90_speed': np.nanpercentile(g['spd_metric'], 90)
+                                  if g['spd_metric'].notna().sum() else np.nan,
+                     'sum_variation': np.nan,  # placeholder
+                     'total_throws_β': g['total_throws'].sum(),
+                     'hi_ratio_β': g['raw_high_intent'].sum() / max(g['total_throws'].sum(), 1)
+                 }))
+                 .reset_index(drop=True)
+    )
+    between_dict[p] = btmp
+
+    # count high_intent days for formula
+    hi_mask   = raw_all['armSpeed_imp'] >= pct75_by[p]
+    hi_counts = (
+        raw_all.loc[hi_mask]
+              .groupby('date_corr')
+              .size()
+              .rename('high_intent')
+    )
+    daily_tmp['high_intent'] = daily_tmp.index.map(hi_counts).fillna(0)
+
+    daily_dict[p] = daily_tmp
+
+# ──────────────────────────────────────────────────────────────────
+# 4) Fill out daily_dict[p] with “Tank readiness” only
+# ──────────────────────────────────────────────────────────────────
+for p in pitchers:
+    daily_p = daily_dict[p].drop(columns="date").reset_index()
+    # hist_p  = _build_outing_rows(p)  # not used here except inside calibrate
+
+    # Force numeric on the four features (needed by calibrate)
+    hist_p = _build_outing_rows(p)
+    for col in ['days_rest','acwr_last','tot_thr_between','hi_ratio_between']:
+        hist_p[col] = pd.to_numeric(hist_p[col], errors='coerce')
+
+    # ─── BUILD ALL DAILY-SCORES ───────────────────────────────────
+    df_dp = daily_p.copy()
+
+    # 1) day-to-day workload variation
+    df_dp['throw_var'] = df_dp['total_throws'].diff().abs().fillna(0)
+    between_dict[p]['sum_variation'] = df_dp.groupby('segment')['throw_var'].sum().values
+
+    # 2) hi_ratio = high_intent / total_throws
+    df_dp['hi_ratio'] = df_dp['high_intent'] / df_dp['total_throws'].replace(0, np.nan)
+
+    # 3) daily_intent_weight from df_raw['intent_weight']
+    intent_per_day = df_raw.groupby('date_corr')['intent_weight'].sum()
+    df_dp['daily_intent_weight'] = df_dp['date'].map(intent_per_day).fillna(0)
+
+    # 4) hybrid_intent = daily_intent_weight * hi_ratio
+    df_dp['hybrid_intent'] = df_dp['daily_intent_weight'] * df_dp['hi_ratio']
+
+    # 5) 28-day rolling 10th & 90th for hybrid_intent
+    ROLL   = 28
+    hyb_p10 = df_dp['hybrid_intent'].rolling(ROLL, min_periods=5).quantile(0.10)
+    hyb_p90 = df_dp['hybrid_intent'].rolling(ROLL, min_periods=5).quantile(0.90)
+    den_h   = (hyb_p90 - hyb_p10).replace(0, np.nan)
+
+    # 6) intent_score = ((hybrid_intent - p10) / (p90 - p10)).clip(0,1)
+    df_dp['intent_score'] = ((df_dp['hybrid_intent'] - hyb_p10) / den_h) \
+                              .clip(0,1).fillna(0)
+
+    # 7) speed_score = 0.25 + 0.75 * normalized(spd_metric)
+    spd_mask = df_dp['spd_metric'].notna()
+    spd_min  = df_dp.loc[spd_mask, 'spd_metric'].min()
+    spd90    = df_dp.loc[spd_mask, 'spd_metric'].quantile(0.90)
+    spd_den  = max(spd90 - spd_min, 1)
+
+    spd_raw              = ((df_dp['spd_metric'] - spd_min) / spd_den).clip(0, 1)
+    df_dp['speed_score'] = 0.25 + 0.75 * spd_raw
+    df_dp['speed_score'] = df_dp['speed_score'].fillna(0.25)
+
+    # 8) game_bonus = 0.10 on days where next_game > 0
+    df_dp['game_bonus'] = (df_dp['next_game'] > 0).astype(float) * 0.10
+
+    # 9) vol_score = (total_throws / 90th-percentile_of_total_throws).clip(0,1)
+    vol_mask = df_dp['total_throws'] > 0
+    vol90    = df_dp.loc[vol_mask, 'total_throws'].quantile(0.90)
+    vol90    = vol90 if vol90 > 0 else 1
+    df_dp['vol_score'] = (df_dp['total_throws'] / vol90).clip(0, 1).fillna(0)
+
+    # ← INSERT “composite” here
+    df_dp['composite'] = (
+          0.50 * df_dp['vol_score']
+        + 0.35 * df_dp['intent_score']
+        + 0.25 * df_dp['speed_score']
+        +        df_dp['game_bonus']
+    ).clip(0, 1)
+
+    # ── NOW SIMULATE TANK READINESS ──────────────────────────────────
+    df_dp = simulate_tank_v2(df_dp, p)
+
+    # save back into daily_dict[p]
+    daily_dict[p] = df_dp.set_index('date')
+
+
+    # ---------------------------------------------------------------
+    # 10) ACWR (7-day acute / 28-day chronic)  ← NEW, must come first
+    # ---------------------------------------------------------------
+    df_dp['acute']   = df_dp['composite'].ewm(span=7 , adjust=False).mean()
+    df_dp['chronic'] = df_dp['composite'].ewm(span=28, adjust=False).mean()
+    df_dp['acwr']    = df_dp['acute'] / df_dp['chronic']
+
+    # write the ACWR-populated frame back to daily_dict
+    daily_dict[p] = df_dp.set_index('date')
+
+    # now it’s safe to calibrate / simulate – ACWR data exist!
+    df_dp = simulate_tank_v2(df_dp, p)
+
+    # finally, store the version that now also has tank readiness
+    daily_dict[p] = df_dp.set_index('date')
+
+# ──────────────────────────────────────────────────────────────────
+# ─── Remove any xgb_models, all_monthly_eval, and “Optional: display evaluation table” here ───
+# (They used to live right below the per-pitcher loop.  Delete those.)
+# ──────────────────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════
+# FORECASTING  – Velo-Predictor × PulseDashboard
+# ────────────────────────────────────────────────────────────────────
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+from xgboost import XGBRegressor   # 📌 keep XGBRegressor, since forecasting still needs it
+
+# ——————————————————————————————————————————————
+# 1)  Feature-engineering helpers (unchanged)
+# ——————————————————————————————————————————————
+def _prep_xy(df, target):
+    df = df.dropna(subset=[target])
+    if df.empty:
+        return pd.DataFrame(), pd.Series(dtype=float)
+
+    X = df.drop(columns=['avg_velo', 'max_velo', 'date'])
+    X = pd.get_dummies(
+            X,
+            columns=['last_day_label', 'pattern_gap'],
+            dummy_na=True
+        ).apply(pd.to_numeric, errors='coerce').fillna(0)
+
+    y = df[target]
+    return X, y
+
+def _train_rf(X,y):
+    grid={'n_estimators':[100,200],'max_depth':[8,16]}
+    gs=GridSearchCV(RandomForestRegressor(random_state=42),
+                    grid,cv=3,n_jobs=-1)
+    gs.fit(X,y)
+    return gs.best_estimator_
+
+def _train_xgb(X,y):
+    grid={'n_estimators':[200,400],'max_depth':[5,8],'learning_rate':[0.05,0.1]}
+    gs=GridSearchCV(XGBRegressor(random_state=42,verbosity=0),
+                    grid,cv=3,n_jobs=-1)
+    gs.fit(X,y)
+    return gs.best_estimator_
+
+from itertools import product
+
+feature_cols = None
+
+def _align(mat, cols):
+    return mat.reindex(columns=cols, fill_value=0)
+
+def optimal_pattern(pitcher, gap, rf_model, xgb_model, X_template, cols):
+    labels   = ['LOW', 'MED', 'HIGH']
+    best_pat, best_pred = None, -np.inf
+
+    for combo in product(labels, repeat=gap):
+        pat = "-".join(combo)
+        X = X_template.copy()
+
+        pat_cols = [c for c in X.columns if c.startswith("pattern_gap_")]
+        X[pat_cols] = 0
+        col = f"pattern_gap_{pat}"
+        if col not in X.columns:
+            X[col] = 0
+        X[col] = 1
+        X = _align(X, cols)
+
+        rf_pred  = rf_model.predict(X)[0]
+        xgb_pred = xgb_model.predict(X)[0]
+        ens_pred = (rf_pred + xgb_pred) / 2
+
+        score = ens_pred + 0.01 * len(set(combo))
+
+        if score > best_pred:
+            best_pat, best_pred = pat, score
+
+        # second pass to re-zero out all other pattern_gap_ columns:
+        pat_cols = [c for c in X.columns if c.startswith('pattern_gap_')]
+        X[pat_cols] = 0
+        col_name = f'pattern_gap_{pat}'
+        if col_name not in X.columns:
+            X[col_name] = 0
+        X[col_name] = 1
+        X = _align(X, cols)
+        y_hat = (rf_model.predict(X)[0] + xgb_model.predict(X)[0]) / 2
+        if y_hat > best_pred:
+            best_pat, best_pred = pat, y_hat
+
+    return best_pat, best_pred
+
+def _importance(model, feat_names, top=None):
+    imp = model.feature_importances_
+    idx = np.argsort(imp)[::-1]
+    if top is not None:
+        idx = idx[:top]
+    return [(feat_names[i], imp[i]) for i in idx]
+
+# ——————————————————————————————————————————————
+# 3)  UI widgets for Forecasting (unchanged)
+# ——————————————————————————————————————————————
+pitcher_fc_dd = wg.Dropdown(options=pitchers, description='Pitcher:')
+date_picker   = wg.DatePicker(description='Next start:', disabled=False)
+run_fc_btn    = wg.Button(description='Predict', button_style='success')
+out_fc        = wg.Output()
+
+def _propose_schedule(daily_p, start_date, pattern):
+    if (pattern == "NA") or (not pattern):
+        return pd.DataFrame()
+
+    outings = _build_outing_rows(pitcher_fc_dd.value)
+    if outings.empty:
+        top = pd.DataFrame()
+    else:
+        thresh = outings["max_velo"].quantile(0.75)
+        top    = outings[outings["max_velo"] >= thresh]
+
+    rest_days      = daily_p[daily_p['label'].isin(['Low', 'Medium', 'High'])]
+    throws_med     = rest_days.loc[rest_days['label'] == 'Medium', 'total_throws'].median()
+    hi_ratio_med   = (
+        rest_days.loc[rest_days['label'] == 'Medium', 'high_intent'].sum()
+        / max(rest_days.loc[rest_days['label'] == 'Medium', 'total_throws'].sum(), 1)
+    )
+
+    mult   = {"LOW": 0.4, "MED": 0.7, "HIGH": 1.0}
+    labels = pattern.split("-")
+    days   = pd.date_range(
+                start_date - pd.Timedelta(days=len(labels)),
+                periods=len(labels),
+                freq="D"
+            )
+
+    rows = []
+    for d, lbl in zip(days, labels):
+        tot = int(throws_med * mult[lbl])
+        hi  = int(tot * hi_ratio_med)
+        rows.append({
+            "Date"        : d.date(),
+            "Day Label"   : lbl,
+            "Total Throws": tot,
+            "High Intent" : hi
+        })
+
+    return pd.DataFrame(rows)
+
+import time, sys
+
+def _status(msg):
+    print(msg.ljust(50), end='\r')
+    sys.stdout.flush()
+
+def run_forecast(_):
+    global feature_cols
+    feature_cols = None
+    with out_fc:
+        out_fc.clear_output()
+        t0 = time.time()
+        p      = pitcher_fc_dd.value
+        start_d = date_picker.value
+        if (p is None) or (start_d is None):
+            print("Select a pitcher and a date.")
+            return
+
+        _status("⏳  training models ...")
+        hist = _build_outing_rows(p)
+        if hist.empty:
+            print("Not enough completed outings for modelling.")
+            return
+
+        models, preds = {}, {}
+        for tgt in ["avg_velo", "max_velo"]:
+            X, y = _prep_xy(hist, tgt)
+            if feature_cols is None:
+                feature_cols = X.columns.tolist()
+            if y.empty:
+                print(f"Not enough non-NaN {tgt} targets.")
+                return
+            X_last = X.iloc[[-1]].copy()
+            preds[tgt] = {"X_last": X_last}
+
+            rf  = _train_rf(X, y)
+            xgb = _train_xgb(X, y)
+            models[tgt] = {"rf": rf, "xgb": xgb}
+
+        _status("⏳  searching optimal pattern ...")
+        last_d   = df_raw.loc[df_raw["pitcher"] == p, "date_corr"].max()
+        rest_gap = max((start_d - last_d).days - 1, 1)
+
+        for tgt in preds:
+            X_tmpl = preds[tgt]["X_last"].copy()
+            X_tmpl = _align(X_tmpl, feature_cols)
+            X_tmpl["days_rest"] = rest_gap
+            preds[tgt]["X_tmpl"] = X_tmpl
+
+        best_pat_avg, best_ens_avg = optimal_pattern(
+            p,
+            rest_gap,
+            models["avg_velo"]["rf"],
+            models["avg_velo"]["xgb"],
+            preds["avg_velo"]["X_tmpl"].copy(),
+            feature_cols
+        )
+
+        best_pat_max, best_ens_max = optimal_pattern(
+            p,
+            rest_gap,
+            models["max_velo"]["rf"],
+            models["max_velo"]["xgb"],
+            preds["max_velo"]["X_tmpl"].copy(),
+            feature_cols
+        )
+
+        print(f"🧮 Optimal {rest_gap}-day pattern for AVG_VELO: {best_pat_avg}")
+        print(f"🧮 Optimal {rest_gap}-day pattern for MAX_VELO: {best_pat_max}\n")
+
+        X_avg = preds["avg_velo"]["X_tmpl"].copy()
+        for col in X_avg.columns:
+            if col.startswith("pattern_gap_"):
+                X_avg[col] = 0
+        X_avg[f"pattern_gap_{best_pat_avg}"] = 1
+        preds["avg_velo"]["X_now"] = _align(X_avg, feature_cols)
+
+        X_max = preds["max_velo"]["X_tmpl"].copy()
+        for col in X_max.columns:
+            if col.startswith("pattern_gap_"):
+                X_max[col] = 0
+        X_max[f"pattern_gap_{best_pat_max}"] = 1
+        preds["max_velo"]["X_now"] = _align(X_max, feature_cols)
+
+        for tgt in ["avg_velo", "max_velo"]:
+            rf  = models[tgt]["rf"]
+            xgb = models[tgt]["xgb"]
+            Xn  = preds[tgt]["X_now"]
+
+            rf_pred  = rf.predict(Xn)[0]
+            xgb_pred = xgb.predict(Xn)[0]
+            ens_pred = (rf_pred + xgb_pred) / 2
+
+            preds[tgt]["rf"]  = rf_pred
+            preds[tgt]["xgb"] = xgb_pred
+            preds[tgt]["ens"] = ens_pred
+
+        daily_p = daily_dict[p]
+        if rest_gap > 1:
+            sched = _propose_schedule(daily_p, start_d, best_pat_avg)
+            if "Date" in sched.columns:
+                sched = sched[sched["Date"] < start_d]
+        else:
+            sched = pd.DataFrame()
+        if not sched.empty:
+            print("📋 Suggested Throw-Schedule:")
+            display(sched.style.hide(axis="index"))
+        elif rest_gap > 1:
+            print("⚠️ No schedule suggestion (insufficient data).\n")
+
+        for tgt in ["avg_velo", "max_velo"]:
+            print(f"\n{tgt.upper()} – predictions (mph)")
+            print(f"   RF   : {preds[tgt]['rf'] :.2f}")
+            print(f"   XGB  : {preds[tgt]['xgb']:.2f}")
+            print(f"   MEAN : {preds[tgt]['ens']:.2f}")
+            _status("✓  prediction ready                             ")
+            print(f"\n⌚ elapsed: {time.time()-t0:,.1f} s\n")
+
+            for lab, model in [("RF", models[tgt]["rf"]), ("XGB", models[tgt]["xgb"])]:
+                top_feats = _importance(model, preds[tgt]["X_now"].columns, top=10)
+                print(f"   · {lab} top-features:")
+                for feat, imp in top_feats:
+                    print(f"       {feat:<25s} {imp:6.3f}")
+
+run_fc_btn.on_click(run_forecast)
+
+def forecasting_module():
+    clear_output(wait=True)
+    display(wg.VBox([wg.HBox([pitcher_fc_dd, date_picker, run_fc_btn]), out_fc]))
+
+# === UI ==================================================
+pitcher_dd = wg.Dropdown(
+    options=['— select —'] + sorted(df_raw['pitcher'].unique()),
+    value='— select —',
+    description='Pitcher:',
+    layout=wg.Layout(width='250px')
+)
+top_menu = wg.Dropdown(
+    options=['— choose view —', 'INDIVIDUAL REPORTS',
+             'COMPARATIVE REPORTS', 'FORECASTING'],
+    value='— choose view —',
+    description='Section:',
+    layout=wg.Layout(width='250px')
+)
+run_btn = wg.Button(description='Run', button_style='success')
+
+report_out = wg.Output()
+
+def run_clicked(_):
+    sec = top_menu.value
+    with report_out:
+        report_out.clear_output()
+        if sec == 'INDIVIDUAL REPORTS':
+            if pitcher_dd.value == '— select —':
+                print("Pick a pitcher first, buddy 📋")
+            else:
+                individual_report(pitcher_dd.value)
+        elif sec == 'COMPARATIVE REPORTS':
+            comparative_report()
+        elif sec == 'FORECASTING':
+            forecasting_module()
+        else:
+            print("Select a section.")
+
+run_btn.on_click(run_clicked)
+
+display(wg.VBox([wg.HBox([top_menu, pitcher_dd, run_btn]), report_out]))
