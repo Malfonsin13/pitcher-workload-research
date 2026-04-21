@@ -85,10 +85,25 @@ def start_based_acwr(pitches):
                 out.append(None)
     return out
 
+def _safe_float(v):
+    """Parse a CSV cell that may be empty / '—' / valid float."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s in ('—', '-', 'NA', 'N/A'):
+        return None
+    # Strip trailing % if present
+    if s.endswith('%'):
+        s = s[:-1]
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
 def process_pitcher_csv(csv_path):
     """Read one TruMedia CSV and return structured starts list."""
     rows = []
-    with open(csv_path) as f:
+    with open(csv_path, encoding='utf-8') as f:
         for r in csv.DictReader(f):
             gd = r['gameDay']
             date = dt.datetime.strptime(gd, '%m/%d/%y')
@@ -99,7 +114,9 @@ def process_pitcher_csv(csv_path):
                 'p': int(r['P']),
                 'result': r.get('result', ''),
                 'opponent': r.get('opponent', ''),
-                'team': r.get('teamWithLevel', '')
+                'team': r.get('teamWithLevel', ''),
+                'vel': _safe_float(r.get('Vel4S')),
+                'strike_pct': _safe_float(r.get('Strike%')),
             })
     rows.sort(key=lambda x: x['date'])
     pitches = [r['p'] for r in rows]
@@ -120,7 +137,9 @@ def process_pitcher_csv(csv_path):
             'opp': r['opponent'],
             'team': r['team'],
             'rest': rest,
-            'acwr': acwrs[i]
+            'acwr': acwrs[i],
+            'vel': r['vel'],
+            'strikePct': r['strike_pct'],
         })
         prev_date = r['date']
     return starts
@@ -345,6 +364,323 @@ print(f"  short-start events: {short_start_aggregates['totalEvents']} across {sh
 
 
 # -----------------------------------------------------------------------------
+# Tempered-start detection (build-up-aware companion to short starts)
+# -----------------------------------------------------------------------------
+
+def compute_tempered_starts(starts):
+    """Detect tempered starts: pitch count <= 75% of running max over prior 4 starts.
+
+    Distinct from chased/short starts. A "tempered" start is deliberately low
+    volume relative to what the pitcher has shown he can handle. Requires:
+    (1) not one of the first 4 starts (so buildup doesn't dominate),
+    (2) prior-4-start running max >= 50P (filter out openers/piggybacks whose
+        own baseline is low), and
+    (3) current P <= 75% of that running max.
+
+    Events are distinct from short-starts because the 4IP+2IP-shorter filter
+    catches "chased from the game mid-outing" while this catches "team called
+    for a deliberately lighter day" (planned backdown, precaution, weather,
+    piggyback slot after a deep start).
+    """
+    out = []
+    for i, cur in enumerate(starts):
+        if i < 4:
+            continue
+        prior_window = starts[max(0, i - 4):i]
+        if not prior_window:
+            continue
+        window_max_p = max(s['p'] for s in prior_window)
+        if window_max_p < 50:
+            continue
+        ratio = cur['p'] / window_max_p
+        if ratio > 0.75:
+            continue
+        # Also skip events that overlap the chased-short definition, since
+        # those are surfaced in the other table — we want the DISTINCT cases.
+        prev = starts[i - 1]
+        cur_outs = ip_to_outs(cur['ip'])
+        prev_outs = ip_to_outs(prev['ip'])
+        is_chased = cur_outs < 12 and (prev_outs - cur_outs) >= 6
+        if is_chased:
+            continue
+        nxt = starts[i + 1] if i + 1 < len(starts) else None
+        # Running season max to date (all starts up to and including cur)
+        season_max = max(s['p'] for s in starts[:i + 1])
+        out.append({
+            'sDate': cur['d'],
+            'sIp': cur['ip'],
+            'sP': cur['p'],
+            'priorMaxP': window_max_p,
+            'pctPriorMax': round(cur['p'] / window_max_p * 100),
+            'seasonMaxToDate': season_max,
+            'pctSeasonMax': round(cur['p'] / season_max * 100) if season_max else None,
+            'nDate': nxt['d'] if nxt else None,
+            'nIp': nxt['ip'] if nxt else None,
+            'nP': nxt['p'] if nxt else None,
+            'nRest': nxt['rest'] if nxt else None,
+            'nextPctPriorMax': round(nxt['p'] / window_max_p * 100) if nxt else None,
+        })
+    return out
+
+
+tempered_start_data = {name: compute_tempered_starts(d['starts']) for name, d in pitcher_data.items()}
+
+
+def compute_tempered_start_aggregates(tempered_data, meta, injuries):
+    """Roll up tempered-start events by org, parallel to short-start aggregates."""
+    events = []
+    org_summary = {}
+    for name, evs in tempered_data.items():
+        if not evs:
+            continue
+        m = meta[name]
+        org = m['org']
+        if org not in org_summary:
+            org_summary[org] = {
+                'org': org,
+                'nEvents': 0,
+                'pitchersWithTempered': set(),
+                'ratiosPriorMax': [],
+                'ratiosSeasonMax': [],
+            }
+        for ev in evs:
+            inj = injuries.get(name)
+            events.append({
+                'pitcher': name,
+                'org': org,
+                'yr': m['yr'],
+                'age': m['age'],
+                'sDate': ev['sDate'],
+                'sIp': ev['sIp'],
+                'sP': ev['sP'],
+                'priorMaxP': ev['priorMaxP'],
+                'pctPriorMax': ev['pctPriorMax'],
+                'seasonMaxToDate': ev['seasonMaxToDate'],
+                'pctSeasonMax': ev['pctSeasonMax'],
+                'nDate': ev['nDate'],
+                'nIp': ev['nIp'],
+                'nP': ev['nP'],
+                'nRest': ev['nRest'],
+                'nextPctPriorMax': ev['nextPctPriorMax'],
+                'injuryLabel': inj['label'] if inj else None,
+                'injurySeverity': inj['severity'] if inj else None,
+            })
+            org_summary[org]['nEvents'] += 1
+            org_summary[org]['pitchersWithTempered'].add(name)
+            org_summary[org]['ratiosPriorMax'].append(ev['pctPriorMax'])
+            if ev['pctSeasonMax'] is not None:
+                org_summary[org]['ratiosSeasonMax'].append(ev['pctSeasonMax'])
+
+    orgs_out = []
+    for org, s in org_summary.items():
+        rp = sorted(s['ratiosPriorMax'])
+        rs = sorted(s['ratiosSeasonMax'])
+        def _median(xs):
+            if not xs: return None
+            n = len(xs)
+            return xs[n // 2] if n % 2 == 1 else round((xs[n // 2 - 1] + xs[n // 2]) / 2)
+        orgs_out.append({
+            'org': org,
+            'nEvents': s['nEvents'],
+            'nPitchers': len(s['pitchersWithTempered']),
+            'orgPitcherCount': sum(1 for n, mm in meta.items() if mm['org'] == org and n in pitcher_data),
+            'medianPctPriorMax': _median(rp),
+            'medianPctSeasonMax': _median(rs),
+        })
+    orgs_out.sort(key=lambda x: (x['medianPctPriorMax'] is None, x['medianPctPriorMax'] if x['medianPctPriorMax'] is not None else 999))
+    events.sort(key=lambda e: (e['org'], e['pitcher'], e['sDate']))
+
+    all_prior = sorted([e['pctPriorMax'] for e in events])
+    all_season = sorted([e['pctSeasonMax'] for e in events if e['pctSeasonMax'] is not None])
+    def _median(xs):
+        if not xs: return None
+        n = len(xs)
+        return xs[n // 2] if n % 2 == 1 else round((xs[n // 2 - 1] + xs[n // 2]) / 2)
+    return {
+        'orgs': orgs_out,
+        'events': events,
+        'totalEvents': len(events),
+        'totalPitchersWithTempered': sum(1 for evs in tempered_data.values() if evs),
+        'globalMedianPctPriorMax': _median(all_prior),
+        'globalMedianPctSeasonMax': _median(all_season),
+    }
+
+
+tempered_start_aggregates = compute_tempered_start_aggregates(tempered_start_data, meta, injuries)
+print(f"  tempered-start events: {tempered_start_aggregates['totalEvents']} across {tempered_start_aggregates['totalPitchersWithTempered']} pitchers", file=sys.stderr)
+
+
+# Augment short_start_aggregates events with pctSeasonMax column (parallel lens)
+def _augment_short_events_with_season_max():
+    for e in short_start_aggregates['events']:
+        starts = pitcher_data[e['pitcher']]['starts']
+        # Find the cur start index by date string
+        idx = next((i for i, s in enumerate(starts) if s['d'] == e['sDate']), None)
+        if idx is None:
+            e['pctSeasonMax'] = None
+            e['seasonMaxToDate'] = None
+            continue
+        season_max = max(s['p'] for s in starts[:idx + 1])
+        e['seasonMaxToDate'] = season_max
+        e['pctSeasonMax'] = round(e['sP'] / season_max * 100) if season_max else None
+        # Next start's % of season max to date (at time of short start)
+        if not e['endOfSeason'] and e['nP'] is not None:
+            e['nextPctSeasonMax'] = round(e['nP'] / season_max * 100) if season_max else None
+        else:
+            e['nextPctSeasonMax'] = None
+
+_augment_short_events_with_season_max()
+
+
+# -----------------------------------------------------------------------------
+# Performance-regression scheduling-response analysis
+# -----------------------------------------------------------------------------
+
+def detect_performance_regressions(starts):
+    """Flag starts where fastball velo drops ≥1.0 mph OR Strike% drops ≥5 pts
+    from the rolling 3-start baseline. Returns events with baseline, delta,
+    next rest, and next-start rebound framing.
+    """
+    out = []
+    for i in range(3, len(starts)):
+        cur = starts[i]
+        window = starts[i - 3:i]
+        prior_vels = [s['vel'] for s in window if s.get('vel') is not None]
+        prior_strikes = [s['strikePct'] for s in window if s.get('strikePct') is not None]
+        cur_vel = cur.get('vel')
+        cur_strike = cur.get('strikePct')
+        vel_drop = None
+        strike_drop = None
+        baseline_vel = None
+        baseline_strike = None
+        if len(prior_vels) >= 2 and cur_vel is not None:
+            baseline_vel = sum(prior_vels) / len(prior_vels)
+            vel_drop = baseline_vel - cur_vel
+        if len(prior_strikes) >= 2 and cur_strike is not None:
+            baseline_strike = sum(prior_strikes) / len(prior_strikes)
+            strike_drop = baseline_strike - cur_strike
+        flags = []
+        if vel_drop is not None and vel_drop >= 1.0:
+            flags.append(f"velo -{vel_drop:.1f}mph")
+        if strike_drop is not None and strike_drop >= 5.0:
+            flags.append(f"strike% -{strike_drop:.1f}pp")
+        if not flags:
+            continue
+        nxt = starts[i + 1] if i + 1 < len(starts) else None
+        # Baseline rest for this pitcher = median of rest values >0 (rest=0 is the first start)
+        all_rests = [s['rest'] for s in starts if s['rest'] and s['rest'] > 0]
+        if all_rests:
+            sr = sorted(all_rests)
+            n = len(sr)
+            baseline_rest = sr[n // 2] if n % 2 == 1 else (sr[n // 2 - 1] + sr[n // 2]) / 2
+        else:
+            baseline_rest = None
+        next_rest = nxt['rest'] if nxt else None
+        delta_rest = (next_rest - baseline_rest) if (next_rest is not None and baseline_rest is not None) else None
+        # Did it rebound? Compare next-start velo/strike to cur
+        rebound_vel = None
+        rebound_strike = None
+        if nxt and nxt.get('vel') is not None and cur_vel is not None:
+            rebound_vel = nxt['vel'] - cur_vel
+        if nxt and nxt.get('strikePct') is not None and cur_strike is not None:
+            rebound_strike = nxt['strikePct'] - cur_strike
+        out.append({
+            'sDate': cur['d'],
+            'sIp': cur['ip'],
+            'sP': cur['p'],
+            'curVel': cur_vel,
+            'curStrike': cur_strike,
+            'baselineVel': round(baseline_vel, 1) if baseline_vel is not None else None,
+            'baselineStrike': round(baseline_strike, 1) if baseline_strike is not None else None,
+            'velDrop': round(vel_drop, 1) if vel_drop is not None else None,
+            'strikeDrop': round(strike_drop, 1) if strike_drop is not None else None,
+            'flags': flags,
+            'baselineRest': round(baseline_rest, 1) if baseline_rest is not None else None,
+            'nDate': nxt['d'] if nxt else None,
+            'nIp': nxt['ip'] if nxt else None,
+            'nP': nxt['p'] if nxt else None,
+            'nRest': next_rest,
+            'deltaRest': round(delta_rest, 1) if delta_rest is not None else None,
+            'reboundVel': round(rebound_vel, 1) if rebound_vel is not None else None,
+            'reboundStrike': round(rebound_strike, 1) if rebound_strike is not None else None,
+            'addedRest': (delta_rest is not None and delta_rest >= 2),
+            'endOfSeason': nxt is None,
+        })
+    return out
+
+
+regression_data = {name: detect_performance_regressions(d['starts']) for name, d in pitcher_data.items()}
+
+
+def compute_scheduling_response(regression_data, meta):
+    """Org-level roll-up: how often do teams add rest after a flagged regression?"""
+    events = []
+    org_summary = {}
+    for name, evs in regression_data.items():
+        if not evs:
+            continue
+        m = meta[name]
+        org = m['org']
+        if org not in org_summary:
+            org_summary[org] = {
+                'org': org,
+                'nEvents': 0,
+                'nAddedRest': 0,
+                'nEndOfSeason': 0,
+                'deltaRests': [],
+            }
+        for ev in evs:
+            events.append({
+                'pitcher': name,
+                'org': org,
+                'yr': m['yr'],
+                **ev,
+            })
+            org_summary[org]['nEvents'] += 1
+            if ev['addedRest']:
+                org_summary[org]['nAddedRest'] += 1
+            if ev['endOfSeason']:
+                org_summary[org]['nEndOfSeason'] += 1
+            if ev['deltaRest'] is not None:
+                org_summary[org]['deltaRests'].append(ev['deltaRest'])
+
+    orgs_out = []
+    for org, s in org_summary.items():
+        dr = sorted(s['deltaRests'])
+        median_delta = None
+        if dr:
+            n = len(dr)
+            median_delta = dr[n // 2] if n % 2 == 1 else round((dr[n // 2 - 1] + dr[n // 2]) / 2, 1)
+        orgs_out.append({
+            'org': org,
+            'nEvents': s['nEvents'],
+            'nAddedRest': s['nAddedRest'],
+            'addedRestPct': round(100 * s['nAddedRest'] / s['nEvents']) if s['nEvents'] else 0,
+            'medianDeltaRest': median_delta,
+            'endOfSeason': s['nEndOfSeason'],
+        })
+    orgs_out.sort(key=lambda x: (-x['addedRestPct'], -x['nEvents']))
+    events.sort(key=lambda e: (e['org'], e['pitcher'], e['sDate']))
+
+    total_events = len(events)
+    total_added = sum(1 for e in events if e['addedRest'])
+    total_eos = sum(1 for e in events if e['endOfSeason'])
+    return {
+        'orgs': orgs_out,
+        'events': events,
+        'totalEvents': total_events,
+        'totalAddedRest': total_added,
+        'totalEndOfSeason': total_eos,
+        'addedRestPct': round(100 * total_added / total_events) if total_events else 0,
+        'totalPitchersFlagged': sum(1 for evs in regression_data.values() if evs),
+    }
+
+
+scheduling_response = compute_scheduling_response(regression_data, meta)
+print(f"  performance-regression events: {scheduling_response['totalEvents']} across {scheduling_response['totalPitchersFlagged']} pitchers; added-rest in {scheduling_response['totalAddedRest']}", file=sys.stderr)
+
+
+# -----------------------------------------------------------------------------
 # Age-group auto-computation (replaces hand-maintained numbers in overview_findings.json)
 # -----------------------------------------------------------------------------
 
@@ -442,6 +778,8 @@ js_payload = {
     'BUILD_DATA': build_data,
     'ASB_DATA': asb_data,
     'SHORT_STARTS': short_start_aggregates,
+    'TEMPERED_STARTS': tempered_start_aggregates,
+    'SCHEDULING_RESPONSE': scheduling_response,
     'AGE_GROUP_STATS': age_group_stats,
     'INSUFFICIENT_HISTORY': insufficient_history,
     'ORG_COLOR': ORG_COLOR,
@@ -655,7 +993,7 @@ js_data = "const PAYLOAD = " + json.dumps(js_payload, default=str) + ";"
 
 # Load the runtime JS (separated for readability)
 app_js = r"""
-const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR } = PAYLOAD;
+const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, TEMPERED_STARTS, SCHEDULING_RESPONSE, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR } = PAYLOAD;
 
 // ============================================================================
 // Helpers
@@ -713,9 +1051,13 @@ document.querySelectorAll('nav.main-nav button').forEach(btn => {
 window.addEventListener('hashchange', handleHash);
 
 function handleHash() {
-  const h = location.hash.replace('#', '').split('/');
-  const tab = h[0] || 'overview';
-  const sub = h[1];
+  // Decode hash segments — names with spaces (e.g. "Gill Hill") get URL-encoded
+  // to "Gill%20Hill" by the browser; without decoding, META/ORGS lookups fail.
+  const parts = location.hash.replace('#', '').split('/').map(s => {
+    try { return decodeURIComponent(s); } catch (e) { return s; }
+  });
+  const tab = parts[0] || 'overview';
+  const sub = parts[1];
   if (TABS.includes(tab)) {
     switchTab(tab);
     if (tab === 'pitchers' && sub && META[sub]) renderPitcher(sub);
@@ -1173,10 +1515,11 @@ function renderShortStarts() {
   const eventRows = S.events.map(e => {
     const color = ORG_COLOR[e.org] || '#888';
     const reframeColor = e.nextPctPrev === null ? 'var(--text-tertiary)' : e.nextPctPrev <= 80 ? 'var(--good)' : e.nextPctPrev <= 100 ? 'var(--info)' : 'var(--warn)';
+    const seasonMaxColor = e.nextPctSeasonMax == null ? 'var(--text-tertiary)' : e.nextPctSeasonMax <= 80 ? 'var(--good)' : e.nextPctSeasonMax <= 100 ? 'var(--info)' : 'var(--warn)';
     const restColor = e.nRest === null ? 'var(--text-tertiary)' : e.nRest >= 10 ? 'var(--danger)' : e.nRest <= 5 ? 'var(--info)' : 'var(--text-muted)';
     const nextCell = e.endOfSeason
       ? '<span style="color:var(--text-tertiary);font-style:italic;">end of season</span>'
-      : `${e.nIp} IP · ${e.nP}P <span style="color:${reframeColor};font-weight:600;">${e.nextPctPrev}%</span>`;
+      : `${e.nIp} IP · ${e.nP}P<br><span style="font-size:10px;color:${reframeColor};font-weight:600;" title="% of pre-short start's pitches">${e.nextPctPrev}% pre</span> · <span style="font-size:10px;color:${seasonMaxColor};font-weight:600;" title="% of pitcher's season-max pitches-so-far at the time of the short start">${e.nextPctSeasonMax == null ? '—' : e.nextPctSeasonMax + '%'} of max</span>`;
     const restCell = e.nRest === null ? '—' : `<span style="color:${restColor};font-weight:${e.nRest >= 10 ? '600' : '400'};">${e.nRest}d</span>${e.skipped ? ' <span class="pill pill-danger" style="font-size:8px;">skipped</span>' : ''}`;
     const injBadge = e.injurySeverity
       ? `<span class="pill ${e.injurySeverity.indexOf('TJ') >= 0 || e.injurySeverity === 'in-season' ? 'pill-danger' : e.injurySeverity === 'nagging-undiagnosed' ? 'pill-warn' : 'pill-neutral'}" style="font-size:8px;" title="${e.injuryLabel}">inj</span>`
@@ -1187,7 +1530,7 @@ function renderShortStarts() {
       <td>${e.yr}</td>
       <td>${e.sDate}</td>
       <td>${e.prevIp} IP · ${e.prevP}P</td>
-      <td style="color:var(--text-muted);">${e.sIp} IP · ${e.sP}P <span style="font-size:10px;color:var(--text-tertiary);">(${e.pctPrev}%)</span></td>
+      <td style="color:var(--text-muted);">${e.sIp} IP · ${e.sP}P <span style="font-size:10px;color:var(--text-tertiary);">(${e.pctPrev}% prev · ${e.pctSeasonMax == null ? '—' : e.pctSeasonMax + '% max)'}</span></td>
       <td>${restCell}</td>
       <td>${nextCell}</td>
     </tr>`;
@@ -1197,13 +1540,82 @@ function renderShortStarts() {
   const globalMedian = S.globalMedianReframe === null ? '—' : `${S.globalMedianReframe}%`;
   const globalMean = S.globalMeanReframe === null ? '—' : `${S.globalMeanReframe}%`;
 
+  // Tempered-starts block
+  const T = TEMPERED_STARTS;
+  const temperedOrgRows = T ? T.orgs.map(o => {
+    const color = ORG_COLOR[o.org] || '#888';
+    const priorColor = o.medianPctPriorMax == null ? 'var(--text-tertiary)' : o.medianPctPriorMax <= 60 ? 'var(--good)' : o.medianPctPriorMax <= 70 ? 'var(--info)' : 'var(--warn)';
+    return `<tr onclick="location.hash='orgs/${o.org}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};font-weight:600;">${o.org}</span></td>
+      <td style="text-align:center;">${o.nEvents}</td>
+      <td style="text-align:center;">${o.nPitchers}/${o.orgPitcherCount}</td>
+      <td style="text-align:center;color:${priorColor};font-weight:600;">${o.medianPctPriorMax == null ? '—' : o.medianPctPriorMax + '%'}</td>
+      <td style="text-align:center;">${o.medianPctSeasonMax == null ? '—' : o.medianPctSeasonMax + '%'}</td>
+    </tr>`;
+  }).join('') : '';
+
+  const temperedEventRows = T ? T.events.map(e => {
+    const color = ORG_COLOR[e.org] || '#888';
+    const injBadge = e.injurySeverity
+      ? `<span class="pill ${e.injurySeverity.indexOf('TJ') >= 0 || e.injurySeverity === 'in-season' ? 'pill-danger' : e.injurySeverity === 'nagging-undiagnosed' ? 'pill-warn' : 'pill-neutral'}" style="font-size:8px;" title="${e.injuryLabel}">inj</span>`
+      : '';
+    const nextCell = e.nDate
+      ? `${e.nIp} IP · ${e.nP}P <span style="font-size:10px;color:var(--text-tertiary);">(${e.nextPctPriorMax}% of prior max)</span>`
+      : '<span style="color:var(--text-tertiary);font-style:italic;">end of season</span>';
+    return `<tr onclick="location.hash='pitchers/${e.pitcher}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};">${e.org}</span></td>
+      <td><strong>${e.pitcher}</strong> ${injBadge}</td>
+      <td>${e.yr}</td>
+      <td>${e.sDate}</td>
+      <td>${e.sIp} IP · ${e.sP}P</td>
+      <td style="font-size:10px;color:var(--text-muted);">prior max ${e.priorMaxP}P · season max ${e.seasonMaxToDate}P</td>
+      <td style="color:var(--warn);font-weight:600;">${e.pctPriorMax}% / ${e.pctSeasonMax == null ? '—' : e.pctSeasonMax + '%'}</td>
+      <td>${nextCell}</td>
+    </tr>`;
+  }).join('') : '';
+
+  // Scheduling-response block
+  const SR = SCHEDULING_RESPONSE;
+  const schedOrgRows = SR ? SR.orgs.map(o => {
+    const color = ORG_COLOR[o.org] || '#888';
+    const pctColor = o.addedRestPct >= 50 ? 'var(--good)' : o.addedRestPct >= 25 ? 'var(--info)' : 'var(--text-muted)';
+    return `<tr onclick="location.hash='orgs/${o.org}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};font-weight:600;">${o.org}</span></td>
+      <td style="text-align:center;">${o.nEvents}</td>
+      <td style="text-align:center;color:${pctColor};font-weight:600;">${o.nAddedRest}/${o.nEvents} · ${o.addedRestPct}%</td>
+      <td style="text-align:center;">${o.medianDeltaRest == null ? '—' : (o.medianDeltaRest > 0 ? '+' : '') + o.medianDeltaRest + 'd'}</td>
+      <td style="text-align:center;color:var(--text-tertiary);">${o.endOfSeason}</td>
+    </tr>`;
+  }).join('') : '';
+
+  const schedEventRows = SR ? SR.events.map(e => {
+    const color = ORG_COLOR[e.org] || '#888';
+    const flagPills = e.flags.map(f => `<span class="pill pill-warn" style="font-size:9px;">${f}</span>`).join(' ');
+    const deltaColor = e.deltaRest === null ? 'var(--text-tertiary)' : e.deltaRest >= 2 ? 'var(--good)' : e.deltaRest <= -1 ? 'var(--warn)' : 'var(--text-muted)';
+    const deltaText = e.deltaRest === null ? '—' : `${e.deltaRest > 0 ? '+' : ''}${e.deltaRest}d`;
+    const reboundBits = [];
+    if (e.reboundVel !== null) reboundBits.push(`velo ${e.reboundVel > 0 ? '+' : ''}${e.reboundVel}mph`);
+    if (e.reboundStrike !== null) reboundBits.push(`strike ${e.reboundStrike > 0 ? '+' : ''}${e.reboundStrike}pp`);
+    const reboundText = e.endOfSeason ? '<span style="color:var(--text-tertiary);font-style:italic;">EOS</span>' : (reboundBits.length ? reboundBits.join(' · ') : '—');
+    return `<tr onclick="location.hash='pitchers/${e.pitcher}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};">${e.org}</span></td>
+      <td><strong>${e.pitcher}</strong></td>
+      <td>${e.yr}</td>
+      <td>${e.sDate}</td>
+      <td>${flagPills}</td>
+      <td style="font-size:10px;color:var(--text-muted);">${e.baselineVel == null ? '—' : e.baselineVel + 'mph'} / ${e.baselineStrike == null ? '—' : e.baselineStrike + '%'} → ${e.curVel == null ? '—' : e.curVel + 'mph'} / ${e.curStrike == null ? '—' : e.curStrike + '%'}</td>
+      <td style="text-align:center;">${e.nRest == null ? '—' : e.nRest + 'd'}<br><span style="font-size:10px;color:${deltaColor};font-weight:600;">${deltaText}</span></td>
+      <td style="font-size:10px;">${reboundText}</td>
+    </tr>`;
+  }).join('') : '';
+
   document.getElementById('shorts-content').innerHTML = `
     <h2>How organizations handle unprompted short starts</h2>
     <p class="lede">
       A "short" start = less than 4.0 IP <em>and</em> at least 2 full innings shorter than the previous start. This isolates the "chased out of a game" scenario from consistent opener/piggyback roles. The key question: <strong>when a starter gets pulled early, does the org rebuild him or drop him back into a normal workload?</strong>
     </p>
     <p class="lede" style="font-size:12.5px;">
-      The framing metric — <strong>next start's pitches as % of the pre-short start's pitches</strong> — answers that question. &lt;80% = tempered re-entry; 80&ndash;100% = matched workload; &gt;100% = increased workload after chased start. Median across the whole dataset: <strong>${globalMedian}</strong> (mean ${globalMean}). ${S.totalEvents} qualifying events across ${S.totalPitchersWithShort} of ${Object.keys(PITCHER_DATA).length} pitchers.
+      Two framing lenses: <strong>% of pre-short start</strong> = did the org temper the NEXT start relative to what the pitcher was doing right before the chase? <strong>% of season-max-to-date</strong> = is that next start low relative to what the pitcher has carried all year? Both are reported so you can read the same event two ways. Median next-start-as-% of pre-short across the dataset: <strong>${globalMedian}</strong> (mean ${globalMean}). ${S.totalEvents} qualifying events across ${S.totalPitchersWithShort} of ${Object.keys(PITCHER_DATA).length} pitchers.
     </p>
 
     <div class="stats-grid">
@@ -1225,7 +1637,7 @@ function renderShortStarts() {
     </div>
 
     <h3>All short-start events</h3>
-    <p class="lede" style="font-size:12px;">Click a row to drill into the pitcher. "inj" badge = the pitcher had an injury event that season (not necessarily tied to this specific short start).</p>
+    <p class="lede" style="font-size:12px;">Click a row to drill into the pitcher. "inj" badge = the pitcher had an injury event that season (not necessarily tied to this specific short start). Percentages shown <em>prev</em> = % of pre-short start's pitches, <em>max</em> = % of pitcher's season-max pitch count at the time of the short start.</p>
     <div class="table-wrap"><table>
       <thead><tr>
         <th>Org</th>
@@ -1233,19 +1645,91 @@ function renderShortStarts() {
         <th>Year</th>
         <th>Short date</th>
         <th>Pre-short start</th>
-        <th>Short start (% of prev)</th>
+        <th>Short start (% prev / % max)</th>
         <th>Next rest</th>
-        <th>Next start (% of pre-short)</th>
+        <th>Next start (% pre · % max)</th>
       </tr></thead>
       <tbody>${eventRows}</tbody>
     </table></div>
 
     <h3>Takeaways (directional — small samples)</h3>
     <div class="finding"><div class="finding-title">Most orgs re-enter slightly below the pre-short workload, not above it</div><div class="finding-body">Median reframe across the full dataset sits near ${globalMedian}, meaning the typical org cuts the next start's pitch count modestly relative to the pre-short outing. Very few events show &gt;110% — orgs are not pushing pitchers harder after a chased start.</div></div>
-    <div class="finding"><div class="finding-title">Skipped turns are rare but informative</div><div class="finding-body">Only ${S.totalSkipped} of ${S.totalEvents} events have a next-rest ≥ 10 days. These are the explicit "we pulled him from the rotation to regroup" cases; they usually cluster with injury flags or documented role changes (Harrison TB piggyback-to-rotation transition, Cunningham NYY shoulder IL).</div></div>
-    <div class="finding"><div class="finding-title">End-of-season short starts are structurally different</div><div class="finding-body">${S.events.filter(e => e.endOfSeason).length} of the ${S.totalEvents} events were the pitcher's final outing — often a workload-tempering shutdown, not a reactive pull. These have no "next start" to measure and should be read as intentional season close, not chased starts.</div></div>
+    <div class="finding"><div class="finding-title">Skipped turns are rare but informative</div><div class="finding-body">Only ${S.totalSkipped} of ${S.totalEvents} events have a next-rest ≥ 10 days. These are the "extra rest between starts" cases; in this dataset they cluster with injury flags (Cunningham NYY shoulder IL) or the All-Star break window (Harrison TB). Whether the extra rest was a deliberate response or a scheduling accident is not something the CSV can tell us.</div></div>
+    <div class="finding"><div class="finding-title">End-of-season short starts are structurally different</div><div class="finding-body">${S.events.filter(e => e.endOfSeason).length} of the ${S.totalEvents} events were the pitcher's final outing — the CSV shows no next start, which is consistent with a season-ending shutdown rather than a reactive pull. These have no "next start" to measure and should not be read as chased starts.</div></div>
 
-    <p class="lede" style="font-size:11px;color:var(--text-tertiary);margin-top:20px;">*Skipped-turn is a rest-based heuristic, not a reported roster move. Where the next rest ≥ 10 days we flag it as likely-skipped; Harrison (TB) is the only hand-verified case in the dataset, the rest are probabilistic.</p>
+    <p class="lede" style="font-size:11px;color:var(--text-tertiary);margin-top:20px;">*Skipped-turn is a rest-based heuristic, not a reported roster move. Where the next rest ≥ 10 days we flag it as likely-skipped; the CSV alone cannot confirm whether the extra rest reflects an org decision, a scheduling gap, or an undiagnosed injury.</p>
+
+    <h2 style="margin-top:40px;">Tempered starts — deliberately light outings (companion lens)</h2>
+    <p class="lede">
+      The short-start detector above catches the "chased mid-game" scenario. This second detector catches a different phenomenon: a start where the pitch count is <strong>≤ 75% of the pitcher's running max across his prior 4 starts</strong>, but the outing wasn't ended prematurely (so it doesn't appear in the chased table). This isolates outings that look like <em>planned tempering</em> — a deliberately light day rather than a cut-short game. Events that overlap the chased-start definition are excluded so the two tables are distinct.
+    </p>
+    <p class="lede" style="font-size:12px;">
+      <strong>Caveats:</strong> This detector cannot distinguish intent from circumstance. A ≤75% outing can reflect a deliberate org decision, a rainout-compressed short start, or a pitcher getting hit early and pulled defensively. The value is that it surfaces events the chased-start filter misses (e.g. 4.0 IP at 50P after a 5.0 IP / 80P start). Read these as "events worth investigating," not as confirmed org philosophy.
+    </p>
+    ${T && T.totalEvents > 0 ? `
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Tempered events</div><div class="stat-value">${T.totalEvents}</div></div>
+      <div class="stat"><div class="stat-label">Pitchers affected</div><div class="stat-value">${T.totalPitchersWithTempered}<span class="stat-sub">/${Object.keys(PITCHER_DATA).length}</span></div></div>
+      <div class="stat"><div class="stat-label">Median % of prior max</div><div class="stat-value">${T.globalMedianPctPriorMax == null ? '—' : T.globalMedianPctPriorMax + '%'}</div></div>
+      <div class="stat"><div class="stat-label">Median % of season max</div><div class="stat-value">${T.globalMedianPctSeasonMax == null ? '—' : T.globalMedianPctSeasonMax + '%'}</div></div>
+    </div>
+    <h3>Per-org summary</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Org</th><th style="text-align:center;">Events</th><th style="text-align:center;">Coverage</th><th style="text-align:center;">Median % prior-max</th><th style="text-align:center;">Median % season-max</th></tr></thead>
+      <tbody>${temperedOrgRows}</tbody>
+    </table></div>
+    <h3>All tempered-start events</h3>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Org</th>
+        <th>Pitcher</th>
+        <th>Year</th>
+        <th>Date</th>
+        <th>Tempered start</th>
+        <th>Baselines</th>
+        <th>% prior / season max</th>
+        <th>Next start</th>
+      </tr></thead>
+      <tbody>${temperedEventRows}</tbody>
+    </table></div>
+    ` : `<p class="lede" style="font-style:italic;">No qualifying tempered-start events detected with current thresholds (prior-4 max ≥ 50P, current ≤ 75% of that max, not chased, not in first 4 starts).</p>`}
+
+    <h2 style="margin-top:40px;">Scheduling response to performance regression (exploratory)</h2>
+    <p class="lede">
+      Does an organization lengthen the next rest window when a pitcher has a bad start? This section flags starts where <strong>fastball velocity dropped ≥ 1.0 mph below the rolling 3-start baseline</strong>, or <strong>Strike% dropped ≥ 5 percentage points</strong>, or both. After each flagged start we compare next-rest to the pitcher's own median rest. "Added rest" = next rest ≥ baseline rest + 2 days.
+    </p>
+    <p class="lede" style="font-size:12px;">
+      <strong>Caveats — read this block as exploratory.</strong> A 3-start rolling baseline is thin; velocity naturally varies ±1 mph start-to-start. We don't control for weather, opponent, or schedule off-days. "Added rest" does <em>not</em> prove the team responded to the regression — it could be a rainout, a scheduled rotation day, or coincidence. With ${SR ? SR.totalPitchersFlagged : 0} flagged pitchers this is a first-pass lens, not a verdict.
+    </p>
+    ${SR && SR.totalEvents > 0 ? `
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Regression events flagged</div><div class="stat-value">${SR.totalEvents}</div></div>
+      <div class="stat"><div class="stat-label">Pitchers flagged</div><div class="stat-value">${SR.totalPitchersFlagged}<span class="stat-sub">/${Object.keys(PITCHER_DATA).length}</span></div></div>
+      <div class="stat"><div class="stat-label">Added-rest response</div><div class="stat-value">${SR.totalAddedRest}<span class="stat-sub">/${SR.totalEvents} · ${SR.addedRestPct}%</span></div></div>
+      <div class="stat"><div class="stat-label">End-of-season flags</div><div class="stat-value">${SR.totalEndOfSeason}<span class="stat-sub">no next-start</span></div></div>
+    </div>
+    <h3>Per-org summary (sorted by added-rest %)</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Org</th><th style="text-align:center;">Events</th><th style="text-align:center;">Added rest (≥ base+2d)</th><th style="text-align:center;">Median Δ-rest</th><th style="text-align:center;">End-of-season</th></tr></thead>
+      <tbody>${schedOrgRows}</tbody>
+    </table></div>
+    <h3>All flagged regression events</h3>
+    <p class="lede" style="font-size:12px;">Click a row to drill into the pitcher. "Δ-rest" = next-start rest minus this pitcher's median rest.</p>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Org</th>
+        <th>Pitcher</th>
+        <th>Year</th>
+        <th>Date</th>
+        <th>Flags</th>
+        <th>3-start baseline → this start</th>
+        <th>Next rest / Δ</th>
+        <th>Next-start rebound</th>
+      </tr></thead>
+      <tbody>${schedEventRows}</tbody>
+    </table></div>
+    <p class="lede" style="font-size:11px;color:var(--text-tertiary);margin-top:12px;">Fastball velocity uses the CSV's <code>Vel4S</code> column; Strike% is the <code>Strike%</code> column. "Rebound" compares next-start velo/strike to the flagged start's values (positive = improvement). End-of-season events are shown but excluded from the added-rest pct calculation-by-definition since there's no next rest.</p>
+    ` : `<p class="lede" style="font-style:italic;">No qualifying regression events detected with current thresholds.</p>`}
   `;
 }
 
