@@ -2586,27 +2586,6 @@ function renderMethodology() {
     <p>To add a pitcher: drop CSV in data/csvs/, add entry to metadata.json (set <code>firstFullSeason</code> and <code>background</code>), optionally add injury/weather notes, run scripts/build.py, commit &amp; push.</p>
   `;
 }
-    <h3>Age group definitions</h3>
-    <p>18-19yo, 20-21yo, 22+yo. Age is as of the season covered by the CSV (not current age). For pitchers who turned 20 during the season, they're in the 18-19 group if they were 19 at season start.</p>
-    <h3>Weather caveat</h3>
-    <p>CSV data does not include weather fields. Unusual gaps (8+ days without known injury or All-Star break) may reflect weather-related rainouts. Short rest windows (&lt; 5 days) can indicate compressed rotations after rainouts. Attribution of suspicious gaps is tracked in data/weather_flags.json based on reporting and game-log context.</p>
-    <h3>Repo structure</h3>
-    <div class="kpi-block"><div class="kpi-block-value" style="font-family:monospace;white-space:pre;font-size:11px;">pitcher-workload-research/
-├── data/
-│   ├── csvs/              TruMedia exports — drop new ones here
-│   ├── metadata.json      Pitcher meta (org, yr, age, draft, etc)
-│   ├── injury_flags.json  Per-pitcher injury context
-│   ├── weather_flags.json Per-pitcher gap attribution
-│   ├── org_findings.json  Per-org qualitative writeups
-│   └── overview_findings.json  Top-level patterns and callouts
-├── scripts/
-│   └── build.py           Regenerates docs/index.html
-├── docs/
-│   └── index.html         The deliverable (GitHub Pages)
-└── README.md</div></div>
-    <p>To add a pitcher: drop CSV in data/csvs/, add entry to metadata.json, optionally add injury/weather notes, run scripts/build.py, commit &amp; push. If the new data shifts conclusions, also update the relevant JSON prose.</p>
-  `;
-}
 
 // ============================================================================
 // Initialize
