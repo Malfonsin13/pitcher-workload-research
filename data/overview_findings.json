@@ -1,65 +1,65 @@
 {
-  "_comment": "Top-level overview content. lede = opening paragraph. callouts = 4 boxes. patterns = enumerated findings. best_practices and age_analysis are dedicated sections. Numbers here come from scripts/build.py computations — when you add new pitchers, rerun the build and refresh these narrative fields if conclusions shift.",
+  "_comment": "Top-level overview content. lede = opening paragraph. callouts = 4 boxes. key_patterns = enumerated descriptive findings. observed_patterns = the section formerly called 'best_practices' — descriptive, not prescriptive. age_analysis is its own block. Numbers come from scripts/build.py computations; rerun build after adding pitchers and refresh prose if conclusions shift.",
 
-  "lede": "Growing research on how MLB organizations manage young starting pitchers. Tracks pitch counts, rest patterns, ACWR-based workload spikes, injury history, and build-up profiles. Currently covers 24 pitchers across 11 organizations spanning 2024-2025 seasons, ages 18-23, from first-year pro debuts through Triple-A promotions. Add pitchers by dropping a TruMedia CSV export in data/csvs/ and appending to metadata.json, then running scripts/build.py.",
+  "lede": "A descriptive study of how MLB organizations manage young, valued starting pitchers during their first full affiliated MiLB season. Surfaces visible in-game starter usage — pitch counts, rest, low-IP outings, build-up shape, response to promotions — derived from game logs only. Currently covers 24 pitchers across 11 organizations, 2024-2025 seasons, ages 18-23, first full pro debuts through AAA. The sample is intentionally focused on arms that threw enough starts for management patterns to be visible; survivorship bias is a feature of the design, not a flaw. Not a measure of total throwing workload (bullpens / catch / live BP are not in the CSVs) and not an injury prediction tool.",
 
   "callouts": [
     {
       "tone": "good",
-      "headline": "Four pitchers ran essentially perfect workload management.",
-      "body": "Ford (SEA), White (MIA), Caminiti (ATL), and Santucci (NYM) spent 96-100% of qualifying starts inside the ACWR sweet spot (0.8-1.3). Different orgs, different ages, different build-up paths — all four show what 'by the book' looks like."
+      "headline": "Four pitchers' seasons sat almost entirely inside the 0.8–1.3 ACWR band.",
+      "body": "Ford (SEA), White (MIA), Caminiti (ATL), and Santucci (NYM) spent 96-100% of qualifying starts inside the 0.8-1.3 reference band. Different orgs, ages, and build-up paths — read the four together as case studies in what unbothered usage looked like in this cohort, not a target other arms should hit."
     },
     {
       "tone": "info",
-      "headline": "Best-practices innings-eater profile: Hackenberg, Ford, Santucci.",
-      "body": "The three pitchers who covered the most innings with clean ACWR discipline AND stayed healthy: Hackenberg (ATL, 129 IP, 91% sweet, 3 levels), Ford (SEA, 125 IP, 100% sweet), Santucci (NYM, 122 IP, 96% sweet). Messick (CLE, 138 IP) also stayed healthy but carried two ACWR spikes and 1.88 max — high-volume but not 'best practice' ACWR discipline. Hess (NYY, 108 IP, 90% sweet) matched the metrics but still ended up with a 27-day mid-season gap and injury history — a reminder that clean volume data doesn't guarantee a clean season."
+      "headline": "Highest-IP pitchers who finished the season healthy: Hackenberg, Ford, Santucci.",
+      "body": "Three pitchers who carried the most innings while staying in-band on ACWR and avoiding in-season injury flags: Hackenberg (ATL, 129 IP, 91% in-band, 3 levels), Ford (SEA, 125 IP, 100% in-band), Santucci (NYM, 122 IP, 96% in-band). Messick (CLE, 138 IP) also stayed healthy but carried two ACWR spikes and 1.88 max — high volume with a less-smooth ratio profile. Hess (NYY, 108 IP, 90% in-band) matched the metrics yet still ended up with a 27-day mid-season gap and injury history — clean visible workload data does not guarantee a clean season, because the CSV does not see bullpens or undisclosed issues."
     },
     {
       "tone": "warn",
-      "headline": "Age drives ceiling — but 20-21 is the messy middle.",
-      "body": "Max pitch count scales with age: 18-19yo avg max 82P, 20-21yo 88P, 22+ 94P. But ACWR discipline is NOT monotonic — 18-19 averages 85% sweet, 20-21 drops to 76%, then 22+ recovers to 83%. The transition-age group is where orgs push hardest without always adjusting management. Three of the five ACWR-spike pitchers in the dataset sit in the 20-21 group."
+      "headline": "Age tracks pitch-count ceiling — and 20-21 is the noisiest middle.",
+      "body": "Avg max P scales with age in this cohort: 18-19yo 82P, 20-21yo 88P, 22+ 94P. In-band ACWR % is not monotonic — 85% at 18-19, 76% at 20-21, 83% at 22+. Three of the five pitchers with an ACWR &gt; 1.5 sit in the 20-21 group. With small per-group n we treat this as a descriptive observation about the cohort, not a generalization about all minor-league pitchers."
     },
     {
       "tone": "danger",
-      "headline": "Invisible injuries are the unsolved problem.",
-      "body": "Knoth's TJ, Meyer's nagging 2024, Nichols's three-IL-stint 2024, Hess's 27-day gap — none were predicted by pitch count or ACWR patterns alone. Extended rest gaps (>15 days) <em>coincide</em> with reported injuries, but that's largely because the gap IS the IL stint — it's confirmatory, not predictive. ACWR spikes are also an unreliable pre-injury signal: of 5 pitchers with a spike above 1.5, only Nichols had an injury pattern that overlapped the spike. Cijntje's three spikes all landed during his high-frequency piggyback phase (3-4 day spacing, 15-87P counts) where the 3-start chronic baseline sat in the 30-50P range — small absolute pitch-count increases register as large ratios when the denominator is that low, so the spikes are a metric artifact, not a workload overload signal. Messick spiked and stayed healthy; Ziehl's spike came during a mid-season trade rebuild; Gill Hill had no formal injury. Volume data is necessary but not sufficient — velocity, mechanics, and perceived-effort tracking would catch what we can't see here."
+      "headline": "Visible workload is necessary context, not sufficient evidence.",
+      "body": "Knoth (offseason TJ), Meyer (2024 nagging issue), Nichols (three IL stints in 2024), Hess (27-day mid-season gap) — none of these stand out in pitch count or ACWR alone. Extended rest gaps (&gt;15 days) <em>coincide</em> with reported injuries, but for most cases the gap IS the IL stint — that is confirmatory, not predictive. ACWR spikes also did not reliably precede injuries here: of 5 pitchers with a spike &gt; 1.5, only Nichols had an injury pattern that overlapped the spike. Cijntje's three spikes all landed during his high-frequency piggyback phase where the 3-start chronic baseline sat in the 30-50P range — small absolute pitch-count increases register as large ratios when the denominator is that low, so the spikes are a metric artifact, not a workload overload signal. We surface workload visibility because that is what the CSV shows; bullpens, side work, mechanics, and perceived effort are not in scope here."
     }
   ],
 
-  "best_practices": {
-    "title": "What do the healthy innings-eaters have in common?",
-    "intro": "Of the pitchers who covered 95+ IP in a single season, six combined that volume with clean ACWR discipline (≥80% sweet, max ≤1.4, zero spikes) AND stayed healthy: Hackenberg (ATL), Ford (SEA), Santucci (NYM), McLean (NYM), Baumann (ATL), and White (MIA). What do they share?",
+  "observed_patterns": {
+    "title": "Patterns observed in the cleanest seasons in this cohort",
+    "intro": "Of the pitchers who covered 95+ IP, six combined that volume with a high in-band ACWR rate (≥80%, max ≤1.4, no spikes &gt; 1.5) and finished the season without an in-season injury flag: Hackenberg (ATL), Ford (SEA), Santucci (NYM), McLean (NYM), Baumann (ATL), White (MIA). The patterns below are what we observed in those six seasons. We are not claiming these patterns caused the outcome — only describing what the visible data showed.",
     "items": [
       {
         "title": "Consistent weekly rhythm",
-        "body": "All six held 6-7 day rest windows 85%+ of the time. No wild compression, no unexplained extensions. Rotation integrity is a shared feature of the healthy-and-productive group. Ford's 7-day rhythm is the strictest in the dataset (20 of 22 rest gaps at exactly 7 days)."
+        "body": "All six held 6-7 day rest windows 85%+ of the time. Few unexplained compressions or extensions. Ford's 7-day rhythm is the strictest in the dataset (20 of 22 rest gaps at exactly 7 days). Rotation integrity is a shared <em>feature</em> of these seasons — we cannot tell from the CSV whether it was the org's deliberate plan or a happy byproduct of how the schedule fell."
       },
       {
-        "title": "Progressive cap expansion tied to promotions, not plateaus",
-        "body": "Hackenberg opened at 70P and ended at 97P across three levels. Ford opened at 75P and ended at 89P. Santucci opened at 66P and ended at 81P. Caps climbed 15-25P over the season in staircase fashion, each step tied to a level promotion — not in one aggressive jump and not stuck at a plateau."
+        "title": "Pitch-count caps expanded in step with promotions",
+        "body": "Hackenberg opened at 70P and ended at 97P across three levels. Ford opened at 75P and ended at 89P. Santucci opened at 66P and ended at 81P. Caps climbed 15-25P over the season in staircase fashion, each step coinciding with a level move — not one aggressive jump, not stuck at a plateau. The CSV cannot tell us whether the cap rose <em>because</em> of the promotion or whether the promotion happened <em>because</em> the pitcher had earned the higher cap; the two move together."
       },
       {
-        "title": "Each pitcher earned at least one promotion during the season",
-        "body": "Hackenberg cleared three levels; the other five made at least one level jump. We can see <em>that</em> the promotions happened and that ACWR / volume stayed clean through each transition; we can't see <em>why</em> the org made each call from the CSV alone. What the data does show: none of the six had a regression or IL stint that pushed the promotion timing."
+        "title": "All six earned at least one promotion in season",
+        "body": "Hackenberg cleared three levels; the other five made at least one level jump. We can see <em>that</em> promotions happened and that pitch counts / ACWR stayed in their reference bands through the transitions; we cannot see <em>why</em> the org made each call from the CSV alone. What the data does show: none of the six had a regression or IL stint that pushed promotion timing back."
       },
       {
-        "title": "ACWR max under 1.4, zero spikes above 1.5",
-        "body": "Hackenberg 1.17, Ford 1.19, Santucci 1.29, McLean 1.28, Baumann 1.35, White 1.12. None of the six exceeded 1.4 max ACWR. Contrast with Messick (CLE workhorse, 138 IP) at 1.88 max with 2 spikes — he stayed healthy, but that's distinct from clean management. Messick's volume was the result, not the method."
+        "title": "Max ACWR under 1.4 across all six seasons",
+        "body": "Hackenberg 1.17, Ford 1.19, Santucci 1.29, McLean 1.28, Baumann 1.35, White 1.12. None exceeded 1.4 max ACWR. Contrast with Messick (CLE workhorse, 138 IP) at 1.88 max with 2 spikes — he stayed healthy too, but his ratio profile was different. The takeaway is descriptive: high-IP and clean ACWR can coexist in this cohort; high-IP without clean ACWR is also possible."
       },
       {
-        "title": "No unexplained mid-season gaps",
-        "body": "Every gap above 10 days in this group was tied to a level promotion (8-11 days typical) or the All-Star break extension. No 'load management' breaks. No short-IL visits. The healthy workhorses show uninterrupted rotation presence — when a gap appears in this dataset without a promotion or ASB explanation, it's almost always injury."
+        "title": "No unexplained mid-season gaps in these six seasons",
+        "body": "Every gap above 10 days in this group was tied to a level promotion (8-11 days typical) or the All-Star break extension. No mystery 10+ day gaps. Across the broader cohort, when a gap of 15+ days appears <em>without</em> a promotion or ASB explanation, it almost always coincides with an injury event in the public reporting. So the absence of unexplained gaps is part of what makes these six seasons readable as 'clean.'"
       },
       {
-        "title": "College draftees and older prep arms dominate the list",
-        "body": "Five of the six clean innings-eaters are 20+ years old. The lone 19yo is White (MIA) — who opened 2024 already capped near 75P thanks to his 2023 CB-A arm development. Physical maturity helps absorb volume without ACWR distortion. The 18-19 group can run clean (85% sweet on average) but doesn't carry enough total IP to enter this category."
+        "title": "Five of six are 20+ years old",
+        "body": "The lone 19yo is White (MIA) — who opened 2024 already capped near 75P thanks to 2023 buildup. Older pitchers in this sample carried more IP without ACWR distortion. The 18-19 group can also run high in-band % (85% on average) but does not carry enough total IP to enter this volume category, which is consistent with how orgs treat the youngest arms in the sample."
       }
     ]
   },
 
   "age_analysis": {
     "title": "Age group patterns",
-    "intro": "Across 24 pitchers, age is the single biggest predictor of workload ceiling. Organization matters for rhythm discipline and short-start handling, but the pitch count cap scales with age more strongly than with org or level. The surprise: ACWR discipline is NOT monotonic with age — it dips at 20-21 and recovers at 22+.",
+    "intro": "Across 24 pitchers, age tracks workload ceiling more closely than org or level does. The notable wrinkle: in-band ACWR % is not monotonic with age in this cohort — it dips at 20-21 and recovers at 22+. We are describing what the cohort showed, not generalizing to all minor-league pitchers.",
     "groups": [
       {
         "label": "18-19 years old",
@@ -102,8 +102,8 @@
   },
 
   "org_rankings": {
-    "title": "Organization discipline rankings",
-    "intro": "Average ACWR sweet% across each org's sampled pitchers. Higher = more consistent in-season workload management. Small samples (1-3 pitchers per org) — directional, not definitive.",
+    "title": "Organization-level descriptive snapshot",
+    "intro": "Mean share of starts in the 0.8–1.3 ACWR reference band across each org's sampled pitchers. Most orgs are 1–3 pitchers — directional only, not a 'team philosophy.' Pair every figure here with raw pitch counts before drawing inferences; ACWR alone can mislead.",
     "tiers": [
       {
         "tier": "Cleanest (sweet% ≥ 85%)",

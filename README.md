@@ -1,8 +1,12 @@
 # MiLB Pitcher Workload Research
 
-Growing research database tracking young MLB organization starting pitchers across their developmental years. Tracks pitch counts, rest patterns, ACWR-based workload spikes, injury history, and build-up profiles — rebuilds into a standalone HTML page every time new data is added.
+A descriptive study of how MLB organizations manage young, valued starting pitchers during their **first full affiliated MiLB season**. Surfaces visible in-game starter usage — pitch counts, rest, low-IP outings, build-up shape, response to promotions — derived from game logs only. Rebuilds into a standalone HTML page every time new data is added.
 
-Currently covers **24 pitchers across 11 organizations**, spanning 2024–2025 seasons, ages 18–23, from first-year pro debuts through Triple-A promotions.
+**Inclusion criteria.** Pitchers who (1) started in April, (2) accumulated enough starts for org-level patterns to be visible, (3) were valued org assets (top draft pick, notable IFA bonus, or known top-30 prospect), and (4) were in their first full affiliated MiLB season. Survivorship bias is intentional; the study is deliberately filtered to arms whose seasons produced enough innings for management decisions to be readable.
+
+**Limitations.** Not a measure of total throwing workload (bullpens, side work, catch play, pregame, and live BP are not in the CSVs). Not an injury prediction tool — we list known injury context for transparency, never as a target. Per-org sample sizes are small (1–3 pitchers in most cases); aggregates are reported with 90% bootstrap CIs.
+
+Currently covers **24 pitchers across 11 organizations**, spanning 2024–2025 seasons, ages 18–23, from first full pro debuts through AAA.
 
 Author: Marcelo Alfonsin
 
@@ -15,31 +19,37 @@ The entire deliverable is `docs/index.html` — standalone, no server required, 
 
 ---
 
-## Headline findings (n=24)
+## Headline observations (n=24)
 
-**Best-practices innings-eaters (95+ IP, clean ACWR, healthy):**
-Hackenberg (ATL, 129 IP, 91% sweet, 1.17 max ACWR, 3 levels), Ford (SEA, 125 IP, 100% sweet), Santucci (NYM, 122 IP, 96% sweet), McLean (NYM, 110 IP), Baumann (ATL, 99 IP), White (MIA, 96 IP). All six: consistent 6–7 day rhythm, progressive cap expansion tied to promotions, ACWR max under 1.4, zero unexplained mid-season gaps.
+**Highest-IP seasons that finished healthy (95+ IP, ≥80% in-band ACWR, max ≤1.4, no in-season injury flag):**
+Hackenberg (ATL, 129 IP, 91% in-band, 1.17 max ACWR, 3 levels), Ford (SEA, 125 IP, 100%), Santucci (NYM, 122 IP, 96%), McLean (NYM, 110 IP), Baumann (ATL, 99 IP), White (MIA, 96 IP). All six showed consistent 6–7 day rhythm, pitch-count caps expanding in step with promotions, ACWR max under 1.4, and no unexplained mid-season gaps. Read as case studies of what unbothered usage looked like in this cohort, not as best practices.
 
-**Age-group pattern — ACWR discipline is U-shaped, not linear:**
-- 18–19 (n=9): avg 81 IP, 82 max P, **85% ACWR sweet**, 1.33 max ACWR — tight leash, most uniform
-- 20–21 (n=7): avg 103 IP, 88 max P, **76% sweet**, 1.54 max ACWR — the messy middle
-- 22+ (n=8): avg 111 IP, 94 max P, **83% sweet**, 1.40 max ACWR — workhorse zone, discipline recovers
+**Age-group observation — in-band ACWR % is U-shaped across this cohort, not linear:**
+- 18–19 (n=9): avg 81 IP, 82 max P, **85% in-band**, 1.33 max ACWR — tight ranges, most uniform usage
+- 20–21 (n=7): avg 103 IP, 88 max P, **76% in-band**, 1.54 max ACWR — most variable middle band
+- 22+ (n=8): avg 111 IP, 94 max P, **83% in-band**, 1.40 max ACWR — workhorse cohort, ratios stabilize
 
-**Organization discipline ranking** (unweighted mean of per-pitcher ACWR sweet%; n=1–3 per org, directional):
+**Organization-level snapshot** (unweighted mean of per-pitcher in-band ACWR %; n=1–3 per org, directional only — demoted into a collapsed `<details>` block on the live site):
 - **Cleanest:** NYM 93.3% (n=2) · ATL 93.0% (n=3) · CLE/WAS 87.5% (n=1)
 - **Middle:** MIA 84.4 (n=2) · LAD 83.8 (n=2) · CLE 82.1 (n=2) · NYY 81.7 (n=2) · SEA 78.9 (n=3)
 - **Most aggressive:** MIL 75.7 (n=3) · NYY/CHW 73.7 (n=1) · TB 68.9 (n=3)
 
 With most orgs at n=1–2, these rankings are starting points for investigation, not team-wide trends. Only ATL, MIL, SEA, and TB clear n=3.
 
-**Invisible injuries remain the unsolved problem — but "rest gap = injury signal" is mostly descriptive, not predictive:**
-Extended rest gaps (>15 days) coincide with reported injuries, but that's largely because the gap IS the IL stint — it's confirmation, not a warning signal. 5 of 6 pitchers with 15+ day gaps had injury issues (Meccage, Meyer, Cunningham, Hess, Nichols); White's 20-day gap was the 2024 Futures Game plus a planned skip. Meanwhile, of 5 pitchers with ACWR spikes above 1.5, only 1 (Nichols) had an injury pattern overlapping the spike. Cijntje's three spikes all landed during his low-pitch-count piggyback phase (3-start chronic baseline at 30–50P makes ACWR mathematically volatile) — they read as metric artifacts of a variable-volume deployment, not workload overload. Messick spiked twice and stayed healthy; Ziehl's came in a mid-season trade rebuild; Gill Hill had no formal injury. Knoth's January 2025 TJ had ZERO warning signs in his 2024 volume data — the scariest case in the dataset.
+**Visible workload is necessary context, not sufficient evidence of injury risk:**
+Extended rest gaps (>15 days) coincide with reported injuries, but that is largely because the gap IS the IL stint — it is confirmatory, not predictive. 5 of 6 pitchers with 15+ day gaps had injury issues (Meccage, Meyer, Cunningham, Hess, Nichols); White's 20-day gap was the 2024 Futures Game plus a planned skip. Of 5 pitchers with ACWR spikes above 1.5, only Nichols had an injury pattern overlapping the spike. Cijntje's three spikes landed during his low-pitch-count piggyback phase (3-start chronic baseline at 30–50P makes ACWR mathematically volatile) — they read as metric artifacts, not workload overload. Knoth's January 2025 TJ had no visible warning in his 2024 volume data; the CSV does not see bullpens, mechanics, or perceived effort.
 
-**Short-start re-entry — median next-start is 97% of pre-short workload, not a protected ramp-down:**
-Across 55 qualifying short-start events, the median next-start pitch count is 97% of the pre-short start's pitch count (mean 96%). Most orgs re-enter the pitcher within 5–15 points of his pre-short workload. The most-tempered exception is NYY (median 52% — both 2025 college draftees got major deloads after chased starts); the most-aggressive is Ziehl's post-trade ramp (NYY/CHW, 122%). Full per-org and per-event breakdown lives in the **Short starts** tab.
+**Short-start handling — split into two buckets:**
+A "true short-workload" start = <4.0 IP AND ≥2 IP shorter than the previous start AND pitch count ≤ 80% of the previous start's pitch count. The pitch-count guard is new in this iteration: it filters out outings where IP collapsed but the workload was held — those are now reported as **inefficient low-IP outings** in their own table. After the split: 38 true-short events across 18 pitchers; 17 inefficient-low-IP events across 12 pitchers. Median next-start as % of pre-short across the true-short bucket is reported on the **Short starts** tab.
+
+**Promotions — pre/post 3-start snapshots:**
+Each level transition (Low-A → High-A, etc.) is detected from the `teamWithLevel` field. The **Promotions** tab reports pre-3 vs post-3 means for pitch count, ACWR, rest, and velocity, plus the number of post-promo starts before pitch count returned to the pre-promo mean. 21 transitions across 17 pitchers in this cohort.
 
 **Scheduling response to performance regression — exploratory:**
-A new analysis flags starts where fastball velocity dropped ≥1.0 mph below the rolling 3-start baseline OR Strike% dropped ≥5 pp, then checks whether the next rest window expanded beyond the pitcher's baseline rest. This is first-pass only (thin rolling baseline, uncontrolled for weather/opponent) — read as a lens for further investigation, not a verdict. Lives in the **Short starts** tab alongside tempered-start detection.
+Flags starts where fastball velocity dropped ≥1.0 mph below the rolling 3-start baseline OR Strike% dropped ≥5 pp, then checks whether the next rest window expanded beyond the pitcher's baseline rest. First-pass only (thin rolling baseline, uncontrolled for weather/opponent) — a lens for investigation, not a verdict. Lives in the **Short starts** tab alongside tempered-start detection.
+
+**Sensitivity to thresholds:**
+Headline metrics (in-band %, spike count, true-short count, tempered count, high-stress P/IP rate) are recomputed under three threshold variants per knob. Variants moving > ±25% from the default are flagged **threshold-sensitive** on the Methodology tab — read those headlines with extra hedging.
 
 **Hard cap patterns cluster clearly by age and org — within small samples:**
 LAD sits tightest at a ~75P ceiling (Patick, Zazueta), though both are 19-20yo so age-appropriate scaling is confounded with org philosophy (n=2, directional). SEA's caps climb across its 3-pitcher sample (Sloan 72 at 19 Low-A → Ford 89 at 20 Low-A → Cijntje 99 at 21 AA) — age and level are confounded, we can't separate them at n=3. CLE is age-calibrated in the 2-pitcher sample (Doughty 80 at 19, Messick 97 at 23). NYY's two 2024 college draftees (Cunningham, Hess) both ran 94–99P in their first pro season and both had in-season disruptions — a cohort to track in 2026, not yet a proven causal link at n=2. TB was aggressive (87–92P) across its 3 sampled 20-21yo arms. ATL's Caminiti at 93P in 18-19 is one pitcher at that age in that org — directional.
@@ -85,9 +95,13 @@ Three-step loop:
   "team": "West Michigan→Erie",
   "level": "High-A→AA",
   "draft": "2024, 5th rd",
+  "background": "college",
+  "firstFullSeason": true,
   "note": "2024 Middle Tennessee draftee, first full pro season"
 }
 ```
+
+`background` is one of `prep | college | international | unknown` (leave as `unknown` if not unambiguous from draft string + age-at-draft). `firstFullSeason` is `true` if the season covered by the CSV qualifies as the pitcher's first full affiliated MiLB season — required for inclusion in this study's cohort.
 
 **3. Run the build:**
 
@@ -131,7 +145,7 @@ Severity tags recognized for coloring: `season-ender-TJ`, `in-season`, `nagging-
 When new data shifts the story, edit the qualitative JSON files:
 
 - **`data/org_findings.json`** — per-org prose (rhythm, cap, buildup, short-start handling, injury patterns, strengths, concerns). If adding a pitcher to an existing org, check whether the narrative still holds. If adding a pitcher to a NEW org, add a new key.
-- **`data/overview_findings.json`** — top-level callouts, key patterns, best practices, age analysis. This is where cross-org conclusions live. If a new pitcher breaks or confirms a pattern, rewrite here.
+- **`data/overview_findings.json`** — top-level callouts, key patterns, observed_patterns block, age analysis. This is where cross-cohort observations live. If a new pitcher breaks or confirms a pattern, rewrite here.
 
 The quantitative sections (scorecard, hard cap rankings, age group averages, injury counts) all recompute automatically from the raw CSVs. You never hand-edit numbers.
 
@@ -185,13 +199,19 @@ ACWR_i = P_i / mean(P_{i-3}, P_{i-2}, P_{i-1})
 ```
 Sweet spot: 0.8–1.3 (bounds inclusive on both ends). Spike: >1.5. Valid for starts i ≥ 4; pitchers with fewer than 4 starts are excluded from sweet%/max-ACWR aggregates and the build script emits a stderr warning for them.
 
-**Short-start definition:** Less than 4.0 IP AND at least 2 full innings shorter than the previous start. There is no explicit exclusion for consistent short-usage (openers, piggyback) — the "≥2 IP shorter than previous" guard *naturally* filters most of those cases, since a uniformly short pattern never creates a 2-IP drop against its own baseline.
+**Short-start definitions — split into two buckets:**
+- **True short-workload start.** All three of: (1) < 4.0 IP, (2) ≥ 2 full IP shorter than the previous start, (3) cur P ≤ 80% of prev P. The pitch-count guard removes outings where IP collapsed but the pitch count was held.
+- **Inefficient low-IP start.** < 4.0 IP and ≥ 2 IP shorter than previous, but cur P > 80% of prev P. Same low-IP outing, but the workload was held — a high-stress outing, not a short-workload event. Reported in its own table.
 
-**% of previous framing:** For short-start aftermath, the NEXT start's pitch count is compared to the PRE-SHORT start. Answers: did the org plan a shorter next outing, or restart normal workload?
+**% of previous framing:** For true-short aftermath, the NEXT start's pitch count is compared to the PRE-SHORT start. Describes whether the next outing was tempered relative to the workload the pitcher was carrying right before the short.
 
-**Org discipline ranking:** unweighted mean of per-pitcher sweet% across each org's sample. A pitcher with 8 starts weighs the same as a pitcher with 28 starts — a deliberate simplicity trade-off given the small per-org samples. Read with a sample-size qualifier: at n=1–2, the ranking is directional only.
+**Org rollups.** Unweighted mean of per-pitcher metrics across each org's sample. A pitcher with 8 starts weighs the same as a pitcher with 28 starts — a deliberate simplicity trade-off given the small per-org samples. Reported with 90% bootstrap CIs (n_iter=1000, fixed seed). Demoted into a collapsed `<details>` block on the live site — directional only at n=1–3.
 
-**Age groups:** 18–19, 20–21, 22+. Age is as of the season covered by the CSV. The per-group numbers (avg IP, avg max P, avg sweet%, avg max ACWR) are auto-computed from the CSVs at build time — not hand-maintained — so they always reflect the current dataset.
+**Age groups:** 18–19, 20–21, 22+. Age is as of the season covered by the CSV. Per-group numbers (avg IP, avg max P, avg in-band %, avg max ACWR) are auto-computed at build time and reported with bootstrap CIs.
+
+**Background split.** Each pitcher carries a `background` field (prep / college / international / unknown). A small split table on the Ages tab reports per-background n, avg IP, max P, in-band %, and P/IP. n is small per background — directional only.
+
+**Sensitivity grid.** Headline metrics are recomputed under three threshold variants per knob: ACWR sweet bounds (0.8–1.3 vs 0.7–1.4 vs 0.85–1.25), spike threshold (>1.5 vs >1.4 vs >1.6), true-short pitch ratio (≤0.80 vs ≤0.70 vs ≤0.90), tempered ratio (≤0.75 vs ≤0.70 vs ≤0.80), high-stress P/IP (≥18 vs ≥17 vs ≥19). Variants moving > ±25% from the default are flagged threshold-sensitive on the Methodology tab.
 
 ---
 

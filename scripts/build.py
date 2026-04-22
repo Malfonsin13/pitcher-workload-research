@@ -100,6 +100,17 @@ def _safe_float(v):
     except ValueError:
         return None
 
+def _safe_int(v):
+    if v is None:
+        return 0
+    s = str(v).strip()
+    if not s or s in ('—', '-', 'NA', 'N/A'):
+        return 0
+    try:
+        return int(float(s))
+    except ValueError:
+        return 0
+
 def process_pitcher_csv(csv_path):
     """Read one TruMedia CSV and return structured starts list."""
     rows = []
@@ -112,6 +123,7 @@ def process_pitcher_csv(csv_path):
                 'gameDay': gd,
                 'ip': float(r['IP']),
                 'p': int(r['P']),
+                'bf': _safe_int(r.get('BF')),
                 'result': r.get('result', ''),
                 'opponent': r.get('opponent', ''),
                 'team': r.get('teamWithLevel', ''),
@@ -126,12 +138,19 @@ def process_pitcher_csv(csv_path):
     prev_date = None
     for i, r in enumerate(rows):
         rest = (r['date'] - prev_date).days if prev_date else 0
+        ip_dec = ip_to_decimal(r['ip'])
+        bf = r['bf']
+        ppi = round(r['p'] / ip_dec, 2) if ip_dec > 0 else None
+        ppb = round(r['p'] / bf, 2) if bf > 0 else None
         starts.append({
             'd': r['date'].strftime('%m/%d'),
             'ymd': r['date'].strftime('%Y-%m-%d'),
             'ip': r['ip'],
-            'ipF': ip_to_decimal(r['ip']),
+            'ipF': ip_dec,
             'p': r['p'],
+            'bf': bf,
+            'pPerIp': ppi,
+            'pPerBf': ppb,
             'r': r['result'][:1] if r['result'] else '',
             'fr': r['result'],
             'opp': r['opponent'],
@@ -223,37 +242,58 @@ asb_data = {name: detect_asb(d['starts']) for name, d in pitcher_data.items()}
 # Short-start detection (lifted from runtime JS for cross-org aggregation)
 # -----------------------------------------------------------------------------
 
-def compute_short_starts(starts):
-    """Detect short unprompted starts: <4 IP AND >=2 IP shorter than previous.
+SHORT_PITCH_RATIO = 0.80  # cur P must be <= this * prev P to qualify as TRUE short-workload
 
-    Mirrors the per-pitcher JS logic at build.py's runtime (renderPitcher) so
-    per-event details line up exactly. Returns a list of events with the
-    pre-short, short, and next-start pitch counts for framing analysis.
+def compute_short_starts(starts):
+    """Detect low-IP starts and split into TWO buckets:
+
+    True short-workload ('short'): cur_ip < 4 AND cur_p <= 0.80 * prev_p AND
+        (prev_ip - cur_ip) >= 2.0. Pitch-count guard ensures the workload
+        actually dropped — not just IP.
+
+    Inefficient low-IP ('inefficient'): cur_ip < 4 AND cur_p > 0.80 * prev_p.
+        Same low-IP outing, but the pitch count was held (or rose). High-stress
+        outing, NOT a short-workload event. Surfaced separately.
+
+    Returns dict {short: [...], inefficient: [...]}.
     """
-    out = []
+    short = []
+    inefficient = []
     for i in range(1, len(starts)):
         prev = starts[i - 1]
         cur = starts[i]
         cur_outs = ip_to_outs(cur['ip'])
         prev_outs = ip_to_outs(prev['ip'])
-        if cur_outs < 12 and (prev_outs - cur_outs) >= 6:
-            nxt = starts[i + 1] if i + 1 < len(starts) else None
-            out.append({
-                'sDate': cur['d'],
-                'sIp': cur['ip'],
-                'sP': cur['p'],
-                'prevP': prev['p'],
-                'prevIp': prev['ip'],
-                'pctPrev': round(cur['p'] / prev['p'] * 100) if prev['p'] else None,
-                'nDate': nxt['d'] if nxt else None,
-                'nIp': nxt['ip'] if nxt else None,
-                'nP': nxt['p'] if nxt else None,
-                'nRest': nxt['rest'] if nxt else None,
-                'nextPctPrev': round(nxt['p'] / prev['p'] * 100) if (nxt and prev['p']) else None
-            })
-    return out
+        if cur_outs >= 12:
+            continue
+        if (prev_outs - cur_outs) < 6:
+            # Need at least 2 IP shorter than previous to be relevant either way.
+            continue
+        nxt = starts[i + 1] if i + 1 < len(starts) else None
+        ratio = (cur['p'] / prev['p']) if prev['p'] else None
+        ev = {
+            'sDate': cur['d'],
+            'sIp': cur['ip'],
+            'sP': cur['p'],
+            'sPperIp': cur.get('pPerIp'),
+            'prevP': prev['p'],
+            'prevIp': prev['ip'],
+            'pctPrev': round(ratio * 100) if ratio is not None else None,
+            'nDate': nxt['d'] if nxt else None,
+            'nIp': nxt['ip'] if nxt else None,
+            'nP': nxt['p'] if nxt else None,
+            'nRest': nxt['rest'] if nxt else None,
+            'nextPctPrev': round(nxt['p'] / prev['p'] * 100) if (nxt and prev['p']) else None
+        }
+        if ratio is not None and ratio <= SHORT_PITCH_RATIO:
+            short.append(ev)
+        else:
+            inefficient.append(ev)
+    return {'short': short, 'inefficient': inefficient}
 
-short_start_data = {name: compute_short_starts(d['starts']) for name, d in pitcher_data.items()}
+_short_raw = {name: compute_short_starts(d['starts']) for name, d in pitcher_data.items()}
+short_start_data = {name: v['short'] for name, v in _short_raw.items()}
+inefficient_start_data = {name: v['inefficient'] for name, v in _short_raw.items()}
 
 
 def compute_short_start_aggregates(short_start_data, meta, injuries):
@@ -360,7 +400,78 @@ def compute_short_start_aggregates(short_start_data, meta, injuries):
     }
 
 short_start_aggregates = compute_short_start_aggregates(short_start_data, meta, injuries)
-print(f"  short-start events: {short_start_aggregates['totalEvents']} across {short_start_aggregates['totalPitchersWithShort']} pitchers", file=sys.stderr)
+print(f"  short-start events (true low-workload): {short_start_aggregates['totalEvents']} across {short_start_aggregates['totalPitchersWithShort']} pitchers", file=sys.stderr)
+
+
+def compute_inefficient_aggregates(inefficient_data, meta, injuries):
+    """Roll up inefficient-low-IP events: <4 IP outings where pitch count was
+    held (or rose) — same workload jammed into fewer outs. NOT a short-workload
+    event; surfaced separately for stress visibility.
+    """
+    events = []
+    org_summary = {}
+    for name, evs in inefficient_data.items():
+        if not evs:
+            continue
+        m = meta[name]
+        org = m['org']
+        if org not in org_summary:
+            org_summary[org] = {
+                'org': org,
+                'nEvents': 0,
+                'pitchersInvolved': set(),
+                'pPerIps': [],
+            }
+        for ev in evs:
+            inj = injuries.get(name)
+            p_per_ip = round(ev['sP'] / ev['sIp'], 1) if ev['sIp'] else None
+            events.append({
+                'pitcher': name,
+                'org': org,
+                'yr': m['yr'],
+                'age': m['age'],
+                'ageGroup': m.get('ageGroup', ''),
+                'sDate': ev['sDate'],
+                'sIp': ev['sIp'],
+                'sP': ev['sP'],
+                'pPerIp': p_per_ip,
+                'prevP': ev['prevP'],
+                'prevIp': ev['prevIp'],
+                'pctPrev': ev['pctPrev'],
+                'nDate': ev['nDate'],
+                'nIp': ev['nIp'],
+                'nP': ev['nP'],
+                'nRest': ev['nRest'],
+                'nextPctPrev': ev['nextPctPrev'],
+                'injuryLabel': inj['label'] if inj else None,
+                'injurySeverity': inj['severity'] if inj else None,
+            })
+            org_summary[org]['nEvents'] += 1
+            org_summary[org]['pitchersInvolved'].add(name)
+            if p_per_ip is not None:
+                org_summary[org]['pPerIps'].append(p_per_ip)
+    orgs_out = []
+    for org, s in org_summary.items():
+        ppi = s['pPerIps']
+        orgs_out.append({
+            'org': org,
+            'nEvents': s['nEvents'],
+            'nPitchers': len(s['pitchersInvolved']),
+            'meanPperIp': round(sum(ppi) / len(ppi), 1) if ppi else None,
+        })
+    orgs_out.sort(key=lambda x: -x['nEvents'])
+    events.sort(key=lambda e: (e['org'], e['pitcher'], e['sDate']))
+    all_ppi = [e['pPerIp'] for e in events if e['pPerIp'] is not None]
+    return {
+        'orgs': orgs_out,
+        'events': events,
+        'totalEvents': len(events),
+        'totalPitchersInvolved': sum(1 for evs in inefficient_data.values() if evs),
+        'globalMeanPperIp': round(sum(all_ppi) / len(all_ppi), 1) if all_ppi else None,
+    }
+
+inefficient_aggregates = compute_inefficient_aggregates(inefficient_start_data, meta, injuries)
+print(f"  inefficient low-IP events: {inefficient_aggregates['totalEvents']} across {inefficient_aggregates['totalPitchersInvolved']} pitchers", file=sys.stderr)
 
 
 # -----------------------------------------------------------------------------
@@ -395,13 +506,13 @@ def compute_tempered_starts(starts):
         ratio = cur['p'] / window_max_p
         if ratio > 0.75:
             continue
-        # Also skip events that overlap the chased-short definition, since
-        # those are surfaced in the other table — we want the DISTINCT cases.
+        # Also skip events that overlap the low-IP definitions (true-short OR
+        # inefficient-low-IP), since those are surfaced in their own tables.
         prev = starts[i - 1]
         cur_outs = ip_to_outs(cur['ip'])
         prev_outs = ip_to_outs(prev['ip'])
-        is_chased = cur_outs < 12 and (prev_outs - cur_outs) >= 6
-        if is_chased:
+        is_low_ip_event = cur_outs < 12 and (prev_outs - cur_outs) >= 6
+        if is_low_ip_event:
             continue
         nxt = starts[i + 1] if i + 1 < len(starts) else None
         # Running season max to date (all starts up to and including cur)
@@ -681,6 +792,259 @@ print(f"  performance-regression events: {scheduling_response['totalEvents']} ac
 
 
 # -----------------------------------------------------------------------------
+# Volatility (ACWR / pitch-count dispersion)
+# -----------------------------------------------------------------------------
+
+import math
+import random
+
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else None
+
+def _sd(xs):
+    if len(xs) < 2:
+        return None
+    m = _mean(xs)
+    var = sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+    return math.sqrt(var)
+
+def _median(xs):
+    if not xs:
+        return None
+    s = sorted(xs)
+    n = len(s)
+    return s[n // 2] if n % 2 == 1 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+def compute_volatility(starts):
+    acwrs = [s['acwr'] for s in starts if s['acwr'] is not None]
+    pitches = [s['p'] for s in starts]
+    if not acwrs:
+        return None
+    acwr_mean = _mean(acwrs)
+    acwr_sd = _sd(acwrs)
+    acwr_cv = (acwr_sd / acwr_mean) if (acwr_sd is not None and acwr_mean) else None
+    pitches_sd = _sd(pitches)
+    crossings_13 = 0
+    crossings_15 = 0
+    for i in range(1, len(acwrs)):
+        prev, cur = acwrs[i - 1], acwrs[i]
+        if (prev <= 1.3 < cur) or (prev > 1.3 >= cur):
+            crossings_13 += 1
+        if (prev <= 1.5 < cur) or (prev > 1.5 >= cur):
+            crossings_15 += 1
+    return {
+        'acwrSd': round(acwr_sd, 3) if acwr_sd is not None else None,
+        'acwrCv': round(acwr_cv, 3) if acwr_cv is not None else None,
+        'pitchesSd': round(pitches_sd, 1) if pitches_sd is not None else None,
+        'crossings13': crossings_13,
+        'crossings15': crossings_15,
+    }
+
+volatility_data = {name: compute_volatility(d['starts']) for name, d in pitcher_data.items()}
+
+
+# -----------------------------------------------------------------------------
+# Efficiency (P/IP, P/BF, high-stress rate)
+# -----------------------------------------------------------------------------
+
+HIGH_STRESS_PPI = 18.0
+
+def compute_efficiency(starts):
+    ppis = [s['pPerIp'] for s in starts if s.get('pPerIp') is not None]
+    ppbs = [s['pPerBf'] for s in starts if s.get('pPerBf') is not None]
+    if not ppis:
+        return None
+    high_stress = sum(1 for x in ppis if x >= HIGH_STRESS_PPI)
+    return {
+        'meanPperIp': round(_mean(ppis), 2),
+        'medianPperIp': round(_median(ppis), 2),
+        'meanPperBf': round(_mean(ppbs), 2) if ppbs else None,
+        'highStressN': high_stress,
+        'highStressPct': round(100 * high_stress / len(ppis), 1),
+        'nStarts': len(ppis),
+    }
+
+efficiency_data = {name: compute_efficiency(d['starts']) for name, d in pitcher_data.items()}
+
+
+# -----------------------------------------------------------------------------
+# Rest instability
+# -----------------------------------------------------------------------------
+
+def compute_rest_instability(starts, weather_gaps):
+    """Per-pitcher rest pattern dispersion. Excludes the first start (rest=0)
+    and weather-flagged gaps from the long-rest count.
+    """
+    rests = [s['rest'] for s in starts[1:]]
+    if not rests:
+        return None
+    rest_sd = _sd(rests)
+    n = len(rests)
+    eq7 = sum(1 for r in rests if r == 7)
+    in67 = sum(1 for r in rests if 6 <= r <= 7)
+    compressed = sum(1 for r in rests if r <= 4)
+    long_rest = sum(1 for r in rests if r >= 10)
+    return {
+        'restSd': round(rest_sd, 2) if rest_sd is not None else None,
+        'medianRest': _median(rests),
+        'shareEq7': round(100 * eq7 / n, 1),
+        'shareIn67': round(100 * in67 / n, 1),
+        'compressedCount': compressed,
+        'longRestCount': long_rest,
+        'nIntervals': n,
+    }
+
+rest_instability_data = {name: compute_rest_instability(d['starts'], weather.get(name)) for name, d in pitcher_data.items()}
+
+
+# -----------------------------------------------------------------------------
+# Velocity response around events
+# -----------------------------------------------------------------------------
+
+def _vel_avg_window(starts, idx, before=True, n=2):
+    if before:
+        window = starts[max(0, idx - n):idx]
+    else:
+        window = starts[idx + 1:idx + 1 + n]
+    vels = [s['vel'] for s in window if s.get('vel') is not None]
+    return _mean(vels) if vels else None
+
+def compute_velocity_response(starts):
+    """For each event type, report mean Vel4S 2 starts before vs 2 starts after."""
+    events_by_type = {
+        'spike': [], 'compressedRest': [], 'trueShort': [], 'longGap': []
+    }
+    for i, cur in enumerate(starts):
+        if i == 0:
+            continue
+        # ACWR spike >1.5
+        if cur['acwr'] is not None and cur['acwr'] > 1.5:
+            pre = _vel_avg_window(starts, i, True, 2)
+            post = _vel_avg_window(starts, i, False, 2)
+            if pre is not None and post is not None:
+                events_by_type['spike'].append({'date': cur['d'], 'pre': round(pre, 1), 'post': round(post, 1), 'delta': round(post - pre, 2)})
+        # Compressed rest <=4
+        if cur['rest'] is not None and 0 < cur['rest'] <= 4:
+            pre = _vel_avg_window(starts, i, True, 2)
+            post = _vel_avg_window(starts, i, False, 2)
+            if pre is not None and post is not None:
+                events_by_type['compressedRest'].append({'date': cur['d'], 'pre': round(pre, 1), 'post': round(post, 1), 'delta': round(post - pre, 2)})
+        # True short (<4 IP, low pitch ratio)
+        if i >= 1:
+            prev = starts[i - 1]
+            cur_outs = ip_to_outs(cur['ip'])
+            prev_outs = ip_to_outs(prev['ip'])
+            if cur_outs < 12 and (prev_outs - cur_outs) >= 6 and prev['p']:
+                ratio = cur['p'] / prev['p']
+                if ratio <= SHORT_PITCH_RATIO:
+                    pre = _vel_avg_window(starts, i, True, 2)
+                    post = _vel_avg_window(starts, i, False, 2)
+                    if pre is not None and post is not None:
+                        events_by_type['trueShort'].append({'date': cur['d'], 'pre': round(pre, 1), 'post': round(post, 1), 'delta': round(post - pre, 2)})
+        # Long gap >=10
+        if cur['rest'] is not None and cur['rest'] >= 10:
+            pre = _vel_avg_window(starts, i, True, 2)
+            post = _vel_avg_window(starts, i, False, 2)
+            if pre is not None and post is not None:
+                events_by_type['longGap'].append({'date': cur['d'], 'pre': round(pre, 1), 'post': round(post, 1), 'delta': round(post - pre, 2)})
+    summary = {}
+    for k, evs in events_by_type.items():
+        deltas = [e['delta'] for e in evs]
+        summary[k] = {
+            'n': len(evs),
+            'meanDelta': round(_mean(deltas), 2) if deltas else None,
+            'events': evs,
+        }
+    return summary
+
+velocity_response_data = {name: compute_velocity_response(d['starts']) for name, d in pitcher_data.items()}
+
+
+# -----------------------------------------------------------------------------
+# Promotion windows (level transitions)
+# -----------------------------------------------------------------------------
+
+def _level_from_team(team_str):
+    """Extract level token from teamWithLevel like 'Wisconsin Timber Rattlers (High-A)'."""
+    if not team_str:
+        return None
+    # Look for parenthetical level
+    if '(' in team_str and ')' in team_str:
+        inside = team_str[team_str.index('(') + 1:team_str.rindex(')')]
+        return inside.strip()
+    return team_str.strip()
+
+def compute_promotion_windows(starts):
+    """Detect level transitions and report pre/post 3-start summaries."""
+    levels = [_level_from_team(s.get('team', '')) for s in starts]
+    promotions = []
+    for i in range(1, len(levels)):
+        if levels[i] and levels[i - 1] and levels[i] != levels[i - 1]:
+            pre = starts[max(0, i - 3):i]
+            post = starts[i:i + 3]
+            if not pre or not post:
+                continue
+            pre_p = _mean([s['p'] for s in pre])
+            post_p = _mean([s['p'] for s in post])
+            pre_acwr = _mean([s['acwr'] for s in pre if s['acwr'] is not None])
+            post_acwr = _mean([s['acwr'] for s in post if s['acwr'] is not None])
+            pre_rest = _mean([s['rest'] for s in pre if s['rest'] and s['rest'] > 0])
+            post_rest = _mean([s['rest'] for s in post if s['rest'] and s['rest'] > 0])
+            pre_vel = _mean([s['vel'] for s in pre if s.get('vel') is not None])
+            post_vel = _mean([s['vel'] for s in post if s.get('vel') is not None])
+            # Recovery: how many post-promo starts before pitch count returns to pre-mean
+            recovery_n = None
+            if pre_p is not None:
+                for j, s in enumerate(starts[i:i + 8]):
+                    if s['p'] >= pre_p:
+                        recovery_n = j + 1
+                        break
+            promotions.append({
+                'date': starts[i]['d'],
+                'fromLevel': levels[i - 1],
+                'toLevel': levels[i],
+                'preP': round(pre_p, 1) if pre_p is not None else None,
+                'postP': round(post_p, 1) if post_p is not None else None,
+                'preAcwr': round(pre_acwr, 2) if pre_acwr is not None else None,
+                'postAcwr': round(post_acwr, 2) if post_acwr is not None else None,
+                'preRest': round(pre_rest, 1) if pre_rest is not None else None,
+                'postRest': round(post_rest, 1) if post_rest is not None else None,
+                'preVel': round(pre_vel, 1) if pre_vel is not None else None,
+                'postVel': round(post_vel, 1) if post_vel is not None else None,
+                'velDelta': round(post_vel - pre_vel, 2) if (pre_vel is not None and post_vel is not None) else None,
+                'recoveryStarts': recovery_n,
+            })
+    return promotions
+
+promotion_data = {name: compute_promotion_windows(d['starts']) for name, d in pitcher_data.items()}
+n_promotions = sum(len(p) for p in promotion_data.values())
+print(f"  promotions detected: {n_promotions} across {sum(1 for p in promotion_data.values() if p)} pitchers", file=sys.stderr)
+
+
+# -----------------------------------------------------------------------------
+# Bootstrap CI helper
+# -----------------------------------------------------------------------------
+
+def bootstrap_ci(values, n_iter=1000, ci=0.90, stat='mean'):
+    """Return (low, high) percentile CI of the chosen statistic. n=1 → None."""
+    if not values or len(values) < 2:
+        return None
+    rng = random.Random(42)
+    samples = []
+    n = len(values)
+    for _ in range(n_iter):
+        sample = [values[rng.randrange(n)] for _ in range(n)]
+        if stat == 'mean':
+            samples.append(sum(sample) / n)
+        elif stat == 'median':
+            samples.append(_median(sample))
+    samples.sort()
+    lo_idx = int((1 - ci) / 2 * n_iter)
+    hi_idx = int((1 + ci) / 2 * n_iter) - 1
+    return (round(samples[lo_idx], 2), round(samples[hi_idx], 2))
+
+
+# -----------------------------------------------------------------------------
 # Age-group auto-computation (replaces hand-maintained numbers in overview_findings.json)
 # -----------------------------------------------------------------------------
 
@@ -731,10 +1095,228 @@ def compute_age_group_stats(pitcher_data, meta, insufficient_history):
             'avg_max_p': round(sum(max_ps) / len(max_ps)) if max_ps else 0,
             'avg_sweet_pct': round(sum(sweets) / len(sweets)) if sweets else 0,
             'avg_max_acwr': round(sum(max_acwrs) / len(max_acwrs), 2) if max_acwrs else 0.0,
+            'ci_sweet_pct': bootstrap_ci(sweets) if len(sweets) >= 2 else None,
+            'ci_max_p': bootstrap_ci(max_ps) if len(max_ps) >= 2 else None,
+            'ci_ip': bootstrap_ci(ips) if len(ips) >= 2 else None,
+            'ci_max_acwr': bootstrap_ci(max_acwrs) if len(max_acwrs) >= 2 else None,
         }
     return out
 
 age_group_stats = compute_age_group_stats(pitcher_data, meta, insufficient_history)
+
+
+# -----------------------------------------------------------------------------
+# Background split (prep / college / international / unknown)
+# -----------------------------------------------------------------------------
+
+def compute_background_split(pitcher_data, meta, insufficient_history):
+    groups = {}
+    for name, d in pitcher_data.items():
+        bg = meta[name].get('background', 'unknown')
+        groups.setdefault(bg, []).append(name)
+    out = {}
+    for label, names in groups.items():
+        ips = []
+        max_ps = []
+        sweets = []
+        ppis = []
+        for name in names:
+            starts = pitcher_data[name]['starts']
+            ips.append(sum(s['ipF'] for s in starts))
+            max_ps.append(max(s['p'] for s in starts) if starts else 0)
+            ppi_vals = [s['pPerIp'] for s in starts if s.get('pPerIp') is not None]
+            if ppi_vals:
+                ppis.append(_mean(ppi_vals))
+            if name in insufficient_history:
+                continue
+            a = _agg_acwr_py(starts)
+            if a['n'] > 0:
+                sweets.append(a['sweetPct'])
+        out[label] = {
+            'n': len(names),
+            'pitchers': sorted(names),
+            'avg_ip': round(_mean(ips), 1) if ips else 0,
+            'avg_max_p': round(_mean(max_ps)) if max_ps else 0,
+            'avg_sweet_pct': round(_mean(sweets)) if sweets else 0,
+            'avg_p_per_ip': round(_mean(ppis), 2) if ppis else None,
+            'ci_sweet_pct': bootstrap_ci(sweets) if len(sweets) >= 2 else None,
+        }
+    return out
+
+background_stats = compute_background_split(pitcher_data, meta, insufficient_history)
+
+
+# -----------------------------------------------------------------------------
+# Org aggregates with bootstrap CIs
+# -----------------------------------------------------------------------------
+
+def compute_org_aggregates_with_ci(pitcher_data, meta, insufficient_history):
+    by_org = {}
+    for name, d in pitcher_data.items():
+        org = meta[name]['org']
+        by_org.setdefault(org, []).append(name)
+    out = {}
+    for org, names in by_org.items():
+        sweets = []
+        max_acwrs = []
+        max_ps = []
+        ips = []
+        ppis = []
+        high_stress_pcts = []
+        for name in names:
+            starts = pitcher_data[name]['starts']
+            ips.append(sum(s['ipF'] for s in starts))
+            max_ps.append(max(s['p'] for s in starts) if starts else 0)
+            ppi_vals = [s['pPerIp'] for s in starts if s.get('pPerIp') is not None]
+            if ppi_vals:
+                ppis.append(_mean(ppi_vals))
+                hs = sum(1 for x in ppi_vals if x >= HIGH_STRESS_PPI)
+                high_stress_pcts.append(100.0 * hs / len(ppi_vals))
+            if name in insufficient_history:
+                continue
+            a = _agg_acwr_py(starts)
+            if a['n'] > 0:
+                sweets.append(a['sweetPct'])
+                max_acwrs.append(a['max'])
+        out[org] = {
+            'n_pitchers': len(names),
+            'pitchers': sorted(names),
+            'mean_sweet_pct': round(_mean(sweets), 1) if sweets else None,
+            'mean_max_acwr': round(_mean(max_acwrs), 2) if max_acwrs else None,
+            'mean_max_p': round(_mean(max_ps), 1) if max_ps else None,
+            'mean_ip': round(_mean(ips), 1) if ips else None,
+            'mean_p_per_ip': round(_mean(ppis), 2) if ppis else None,
+            'mean_high_stress_pct': round(_mean(high_stress_pcts), 1) if high_stress_pcts else None,
+            'ci_sweet_pct': bootstrap_ci(sweets) if len(sweets) >= 2 else None,
+            'ci_max_acwr': bootstrap_ci(max_acwrs) if len(max_acwrs) >= 2 else None,
+            'ci_max_p': bootstrap_ci(max_ps) if len(max_ps) >= 2 else None,
+            'ci_ip': bootstrap_ci(ips) if len(ips) >= 2 else None,
+        }
+    return out
+
+org_aggregates = compute_org_aggregates_with_ci(pitcher_data, meta, insufficient_history)
+
+
+# -----------------------------------------------------------------------------
+# Sensitivity grid — recompute headlines under threshold variants
+# -----------------------------------------------------------------------------
+
+def compute_sensitivity_grid(pitcher_data, meta, insufficient_history):
+    """For each headline metric, recompute under three threshold variants.
+    Headlines: global sweet%, spike count, true-short count, tempered count,
+    high-stress P/IP rate.
+    """
+    def _global_sweet(lo, hi):
+        sweets = []
+        for name, d in pitcher_data.items():
+            if name in insufficient_history:
+                continue
+            valid = [s['acwr'] for s in d['starts'] if s['acwr'] is not None]
+            if not valid:
+                continue
+            sweets.append(100.0 * sum(1 for x in valid if lo <= x <= hi) / len(valid))
+        return round(_mean(sweets), 1) if sweets else None
+
+    def _spike_count(thresh):
+        n = 0
+        for name, d in pitcher_data.items():
+            for s in d['starts']:
+                if s['acwr'] is not None and s['acwr'] > thresh:
+                    n += 1
+        return n
+
+    def _true_short_count(ratio_cutoff):
+        n = 0
+        for name, d in pitcher_data.items():
+            starts = d['starts']
+            for i in range(1, len(starts)):
+                prev = starts[i - 1]
+                cur = starts[i]
+                co = ip_to_outs(cur['ip'])
+                po = ip_to_outs(prev['ip'])
+                if co < 12 and (po - co) >= 6 and prev['p']:
+                    if cur['p'] / prev['p'] <= ratio_cutoff:
+                        n += 1
+        return n
+
+    def _tempered_count(ratio):
+        n = 0
+        for name, d in pitcher_data.items():
+            starts = d['starts']
+            for i, cur in enumerate(starts):
+                if i < 4:
+                    continue
+                window = starts[max(0, i - 4):i]
+                wm = max(s['p'] for s in window)
+                if wm < 50:
+                    continue
+                if cur['p'] / wm > ratio:
+                    continue
+                prev = starts[i - 1]
+                co = ip_to_outs(cur['ip'])
+                po = ip_to_outs(prev['ip'])
+                if co < 12 and (po - co) >= 6:
+                    continue
+                n += 1
+        return n
+
+    def _high_stress_rate(ppi_thresh):
+        all_ppis = []
+        for name, d in pitcher_data.items():
+            for s in d['starts']:
+                if s.get('pPerIp') is not None:
+                    all_ppis.append(s['pPerIp'])
+        if not all_ppis:
+            return None
+        return round(100.0 * sum(1 for x in all_ppis if x >= ppi_thresh) / len(all_ppis), 1)
+
+    grid = {
+        'sweet_bounds': {
+            'default': {'label': '0.8–1.3', 'value': _global_sweet(0.8, 1.3)},
+            'wider':   {'label': '0.7–1.4', 'value': _global_sweet(0.7, 1.4)},
+            'tighter': {'label': '0.85–1.25', 'value': _global_sweet(0.85, 1.25)},
+        },
+        'spike_threshold': {
+            'default': {'label': '>1.5', 'value': _spike_count(1.5)},
+            'lower':   {'label': '>1.4', 'value': _spike_count(1.4)},
+            'higher':  {'label': '>1.6', 'value': _spike_count(1.6)},
+        },
+        'true_short_ratio': {
+            'default': {'label': '≤0.80', 'value': _true_short_count(0.80)},
+            'tighter': {'label': '≤0.70', 'value': _true_short_count(0.70)},
+            'looser':  {'label': '≤0.90', 'value': _true_short_count(0.90)},
+        },
+        'tempered_ratio': {
+            'default': {'label': '≤0.75', 'value': _tempered_count(0.75)},
+            'tighter': {'label': '≤0.70', 'value': _tempered_count(0.70)},
+            'looser':  {'label': '≤0.80', 'value': _tempered_count(0.80)},
+        },
+        'high_stress_ppi': {
+            'default': {'label': '≥18.0', 'value': _high_stress_rate(18.0)},
+            'lower':   {'label': '≥17.0', 'value': _high_stress_rate(17.0)},
+            'higher':  {'label': '≥19.0', 'value': _high_stress_rate(19.0)},
+        },
+    }
+    # Flag metrics where the variants move > ±25% from default
+    for k, v in grid.items():
+        d = v['default']['value']
+        sensitive = False
+        if d not in (None, 0):
+            for variant_key in v:
+                if variant_key == 'default':
+                    continue
+                vv = v[variant_key]['value']
+                if vv is None:
+                    continue
+                if abs(vv - d) / d > 0.25:
+                    sensitive = True
+                    break
+        v['threshold_sensitive'] = sensitive
+    return grid
+
+sensitivity_grid = compute_sensitivity_grid(pitcher_data, meta, insufficient_history)
+n_sensitive = sum(1 for v in sensitivity_grid.values() if v.get('threshold_sensitive'))
+print(f"  sensitivity grid: {n_sensitive}/{len(sensitivity_grid)} metrics flagged threshold-sensitive (±25%)", file=sys.stderr)
 
 # Override the numeric fields in overview.age_analysis.groups with auto-computed
 # values. Keep the prose (label, takeaway) from JSON; replace the numbers so
@@ -778,9 +1360,18 @@ js_payload = {
     'BUILD_DATA': build_data,
     'ASB_DATA': asb_data,
     'SHORT_STARTS': short_start_aggregates,
+    'INEFFICIENT_STARTS': inefficient_aggregates,
     'TEMPERED_STARTS': tempered_start_aggregates,
     'SCHEDULING_RESPONSE': scheduling_response,
     'AGE_GROUP_STATS': age_group_stats,
+    'BACKGROUND_STATS': background_stats,
+    'ORG_AGGREGATES': org_aggregates,
+    'VOLATILITY': volatility_data,
+    'EFFICIENCY': efficiency_data,
+    'REST_INSTABILITY': rest_instability_data,
+    'VELOCITY_RESPONSE': velocity_response_data,
+    'PROMOTIONS': promotion_data,
+    'SENSITIVITY': sensitivity_grid,
     'INSUFFICIENT_HISTORY': insufficient_history,
     'ORG_COLOR': ORG_COLOR,
     'GENERATED': dt.datetime.now().strftime('%B %Y')
@@ -963,7 +1554,8 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
   <button data-tab="pitchers">Pitchers</button>
   <button data-tab="orgs">Organizations</button>
   <button data-tab="shorts">Short starts</button>
-  <button data-tab="best">Best practices</button>
+  <button data-tab="promotions">Promotions</button>
+  <button data-tab="best">Patterns</button>
   <button data-tab="ages">Age analysis</button>
   <button data-tab="methodology">Methodology</button>
 </div></nav>
@@ -972,6 +1564,7 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
 <div class="tab-panel" id="tab-pitchers"><div class="sub-nav" id="pitcher-subnav"></div><div id="pitcher-detail"></div></div>
 <div class="tab-panel" id="tab-orgs"><div class="sub-nav" id="org-subnav"></div><div id="org-detail"></div></div>
 <div class="tab-panel" id="tab-shorts"><div id="shorts-content"></div></div>
+<div class="tab-panel" id="tab-promotions"><div id="promotions-content"></div></div>
 <div class="tab-panel" id="tab-best"><div id="best-content"></div></div>
 <div class="tab-panel" id="tab-ages"><div id="ages-content"></div></div>
 <div class="tab-panel" id="tab-methodology"><div id="methodology-content"></div></div>
@@ -1034,7 +1627,7 @@ function hexToRgb(hex) {
 // Tab switching + routing
 // ============================================================================
 
-const TABS = ['overview', 'pitchers', 'orgs', 'shorts', 'best', 'ages', 'methodology'];
+const TABS = ['overview', 'pitchers', 'orgs', 'shorts', 'promotions', 'best', 'ages', 'methodology'];
 
 function switchTab(tab) {
   document.querySelectorAll('nav.main-nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -1137,18 +1730,21 @@ function renderOverview() {
   }).join('');
 
   document.getElementById('overview-content').innerHTML = `
+    <div class="callout callout-info" style="margin-bottom:18px;border-left-width:4px;">
+      <strong>About this study.</strong> A descriptive look at how MLB organizations manage young, valued starting pitchers during their <strong>first full affiliated MiLB season</strong>. It surfaces visible in-game starter usage — pitch counts, rest, low-IP outings, build-up shape, response to promotions — derived from game logs only. <strong>It does not capture total throwing workload</strong> (bullpens, side work, catch play, pregame, live BP) and is <strong>not an injury prediction tool</strong>. The sample is intentionally focused on pitchers who threw enough starts for org-level patterns to become visible; survivorship bias is a feature of the design, not an accident. See <a href="#methodology" style="color:inherit;text-decoration:underline;">Methodology</a> for inclusion criteria and limitations.
+    </div>
     <h2>Summary</h2>
     <p class="lede">${OVERVIEW.lede}</p>
     <h2>The big picture</h2>
     <div class="two-col">${callouts}</div>
-    <h2>Workload management scorecard</h2>
-    <p class="lede">Uncoupled rolling 4-start ACWR. Acute = current start pitches, Chronic = average of previous 3 starts. Sweet spot = 0.8-1.3. Spike = &gt;1.5. Click any row to drill into the pitcher.</p>
+    <h2>Workload-visibility scorecard</h2>
+    <p class="lede">Uncoupled rolling 4-start ACWR. Acute = current start pitches, Chronic = average of previous 3 starts. The 0.8–1.3 band is a common reference zone, not a target — we report it <em>paired with raw pitch counts</em>; ACWR alone can mislead, especially when the chronic baseline is low or volatile. Spike = &gt;1.5. Click any row to drill into the pitcher.</p>
     <div class="scorecard">
-      <div class="scorecard-head"><div>pitcher · org · yr</div><div>GS</div><div>max P</div><div>ACWR max</div><div>% in sweet spot</div><div>status</div></div>
+      <div class="scorecard-head"><div>pitcher · org · yr</div><div>GS</div><div>max P</div><div>ACWR max</div><div>% in 0.8–1.3 band</div><div>status</div></div>
       ${scorecard}
     </div>
-    <h2>Hard cap ranking</h2>
-    <p class="lede">p25 · median · p75 · max pitch count per pitcher. Look for compressed bars with low max for strict cap pattern.</p>
+    <h2>Pitch-count distribution per pitcher</h2>
+    <p class="lede">p25 · median · p75 · max pitch count per pitcher. Compressed bars with a low max indicate a tighter usage envelope; wider bars indicate more variable outings. Descriptive only.</p>
     <div class="legend-row">
       <span><span class="legend-swatch" style="background:#888;opacity:0.25;"></span>p25-p75 range</span>
       <span><span class="legend-swatch" style="background:#555;width:3px;height:10px;"></span>median</span>
@@ -1156,11 +1752,17 @@ function renderOverview() {
     </div>
     ${capHtml}
     <h2 style="margin-top:24px;">Injury watchlist</h2>
-    <p class="lede">Confirmed or suspected injury situations with visible impact on workload data. Based on public reporting cross-referenced with CSV patterns.</p>
+    <p class="lede">Confirmed or suspected injury situations with visible impact on workload data. Based on public reporting cross-referenced with CSV patterns. Listed for context — not used as outcome labels in any analysis on this site.</p>
     ${injuriesHtml}
-    <h2>Key patterns across all pitchers</h2>
+    <h2>Patterns observed across the cohort</h2>
     ${patterns}
-    ${OVERVIEW.org_rankings ? renderOrgRankings(OVERVIEW.org_rankings) : ''}
+    ${OVERVIEW.org_rankings ? `
+      <details style="margin-top:32px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:14px 18px;">
+        <summary style="cursor:pointer;font-weight:600;color:var(--text);font-size:15px;">Org-level descriptive snapshot — small samples, directional only ▾</summary>
+        <p class="lede" style="margin-top:10px;font-size:12px;">Most orgs are represented by 1–3 pitchers in this sample. The rollups below are useful as a prompt to investigate, not as evidence of "team philosophy." We deliberately keep this section collapsed and below the per-pitcher views.</p>
+        ${renderOrgRankings(OVERVIEW.org_rankings)}
+      </details>
+    ` : ''}
   `;
 }
 
@@ -1196,9 +1798,9 @@ function renderOrgRankings(orgRank) {
     </div>`;
   }).join('');
   return `
-    <h2 style="margin-top:32px;">${orgRank.title}</h2>
-    <p class="lede">${orgRank.intro}</p>
-    <div class="callout callout-info" style="margin-bottom:14px;"><strong>Sample-size reminder:</strong> Most organizations are represented by 1&ndash;3 pitchers. <span class="pill pill-danger">n=1</span> rows reflect a single pitcher and should be read as <em>directional</em>, not as team-wide trends. <span class="pill pill-warn">n=2</span> rows are suggestive. Only when <span class="pill pill-good">n≥3</span> does a pattern start to become a claim.</div>
+    <h3 style="margin-top:14px;">${orgRank.title}</h3>
+    <p class="lede" style="font-size:12.5px;">${orgRank.intro}</p>
+    <div class="callout callout-info" style="margin-bottom:14px;font-size:12px;"><strong>Sample-size reminder:</strong> <span class="pill pill-danger">n=1</span> rows reflect a single pitcher and should be read as <em>directional</em>, not as team-wide trends. <span class="pill pill-warn">n=2</span> rows are suggestive. Only when <span class="pill pill-good">n≥3</span> does a pattern start to become a claim. Pair every ACWR figure with raw pitch counts before drawing inferences.</div>
     <div class="org-rankings-grid">${tierHtml}</div>
   `;
 }
@@ -1437,25 +2039,103 @@ function renderOrg(key) {
 }
 
 // ============================================================================
-// Best practices tab
+// Observed patterns tab
 // ============================================================================
 
 function renderBest() {
-  const bp = OVERVIEW.best_practices;
+  // Renamed from "best practices" to "observed patterns" — descriptive, not prescriptive.
+  const bp = OVERVIEW.observed_patterns || OVERVIEW.best_practices;
   const items = bp.items.map(i => `<div class="best-item"><div class="best-item-title">${i.title}</div><div class="best-item-body">${i.body}</div></div>`).join('');
   document.getElementById('best-content').innerHTML = `
     <h2>${bp.title}</h2>
     <p class="lede">${bp.intro}</p>
+    <div class="callout callout-info" style="margin-bottom:14px;font-size:12.5px;"><strong>Framing:</strong> these are patterns we <em>observed</em> in arms that finished the season healthy and on rhythm. They are not "best practices" the analysis recommends; we cannot demonstrate causation, only describe what we saw across the visible game-log signal.</div>
     ${items}
-    <h3>The exemplars</h3>
+    <h3>Pitchers whose seasons looked the cleanest on this signal</h3>
+    <p class="lede" style="font-size:12px;">"Cleanest" here = high share of starts in the 0.8–1.3 ACWR band, plausible build-up shape, low rate of inefficient low-IP outings, no in-season injury flag. Read as four <em>case studies in what unbothered usage looked like</em>, not as a leaderboard.</p>
     <div class="two-col">
-      <div class="callout callout-good"><strong>Parker Messick (CLE 2024, 23yo)</strong><br>138 IP · 28 GS · max 97P · 80% ACWR sweet. FSU college lefty, 2022 2nd rd. Lake County → Akron (AA). Eastern League All-Star. MLB debut April 2026 with a near-no-hitter in 11th start.</div>
-      <div class="callout callout-good"><strong>Drue Hackenberg (ATL 2024, 22yo)</strong><br>129 IP · 25 GS · max 97P · 91% ACWR sweet. Virginia Tech college righty, 2023 2nd rd. Rome → Mississippi → Gwinnett (3 levels). Clean health across aggressive promotions.</div>
+      <div class="callout callout-good"><strong>Parker Messick (CLE 2024, 23yo)</strong><br>138 IP · 28 GS · max 97P · 80% in-band. FSU college lefty, 2022 2nd rd. Lake County → Akron (AA). Eastern League All-Star. MLB debut April 2026 with a near-no-hitter in 11th start.</div>
+      <div class="callout callout-good"><strong>Drue Hackenberg (ATL 2024, 22yo)</strong><br>129 IP · 25 GS · max 97P · 91% in-band. Virginia Tech college righty, 2023 2nd rd. Rome → Mississippi → Gwinnett (3 levels). Clean health across aggressive promotions.</div>
     </div>
     <div class="two-col">
-      <div class="callout callout-good"><strong>Woodrow Ford (SEA 2025, 20yo)</strong><br>125 IP · 23 GS · max 89P · 100% ACWR sweet. 2022 2nd rd. Modesto (Low-A). Held 7-day rotation for 20 of 22 rest gaps. Only Low-A arm in the exemplar group — shows it's possible to log heavy innings at the lowest full-season level.</div>
-      <div class="callout callout-good"><strong>Jonathan Santucci (NYM 2025, 22yo)</strong><br>122 IP · 26 GS · max 86P · 96% ACWR sweet. 2024 2nd rd. Brooklyn → Binghamton. Clean progression High-A to AA, opener to peak with no injury disruptions.</div>
+      <div class="callout callout-good"><strong>Woodrow Ford (SEA 2025, 20yo)</strong><br>125 IP · 23 GS · max 89P · 100% in-band. 2022 2nd rd. Modesto (Low-A). Held 7-day rotation for 20 of 22 rest gaps. Only Low-A arm in this group — heavy innings at the lowest full-season level were possible here.</div>
+      <div class="callout callout-good"><strong>Jonathan Santucci (NYM 2025, 22yo)</strong><br>122 IP · 26 GS · max 86P · 96% in-band. 2024 2nd rd. Brooklyn → Binghamton. Steady High-A → AA progression, opener to peak with no injury disruptions.</div>
     </div>
+  `;
+}
+
+// ============================================================================
+// Promotions tab — pre/post snapshots around level transitions
+// ============================================================================
+function renderPromotions() {
+  const all = [];
+  Object.keys(PROMOTIONS || {}).forEach(name => {
+    (PROMOTIONS[name] || []).forEach(pr => all.push({ name, m: META[name], ...pr }));
+  });
+  if (!all.length) {
+    document.getElementById('promotions-content').innerHTML = '<h2>Promotions</h2><p class="lede">No level transitions detected in this cohort.</p>';
+    return;
+  }
+  // Aggregate deltas
+  const deltaP = all.filter(a => a.preP != null && a.postP != null).map(a => a.postP - a.preP);
+  const deltaRest = all.filter(a => a.preRest != null && a.postRest != null).map(a => a.postRest - a.preRest);
+  const deltaVel = all.filter(a => a.velDelta != null).map(a => a.velDelta);
+  const _mean = xs => xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length) : null;
+  const meanDp = _mean(deltaP);
+  const meanDr = _mean(deltaRest);
+  const meanDv = _mean(deltaVel);
+  const recoveries = all.filter(a => a.recoveryStarts != null).map(a => a.recoveryStarts);
+  const meanRecov = _mean(recoveries);
+  const fmt = (v, suf = '') => v == null ? '—' : (v > 0 ? '+' : '') + (Math.abs(v) < 10 ? v.toFixed(2) : v.toFixed(1)) + suf;
+
+  const rows = all.sort((a, b) => a.name.localeCompare(b.name)).map(p => {
+    const color = ORG_COLOR[p.m.org] || '#888';
+    const dp = (p.preP != null && p.postP != null) ? p.postP - p.preP : null;
+    const dr = (p.preRest != null && p.postRest != null) ? p.postRest - p.preRest : null;
+    const dpColor = dp == null ? 'var(--text-tertiary)' : dp <= -10 ? 'var(--good)' : dp <= 0 ? 'var(--info)' : 'var(--warn)';
+    const drColor = dr == null ? 'var(--text-tertiary)' : dr >= 1 ? 'var(--good)' : dr <= -1 ? 'var(--warn)' : 'var(--text-muted)';
+    const dvColor = p.velDelta == null ? 'var(--text-tertiary)' : p.velDelta >= 0 ? 'var(--good)' : p.velDelta <= -0.5 ? 'var(--warn)' : 'var(--text-muted)';
+    return `<tr onclick="location.hash='pitchers/${p.name}'" style="cursor:pointer;">
+      <td><span class="pill" style="background:${color}22;color:${color};">${p.m.org}</span></td>
+      <td><strong>${p.name}</strong> <span style="font-size:10px;color:var(--text-tertiary);">${p.m.yr} · age ${p.m.age}</span></td>
+      <td>${p.date}</td>
+      <td style="font-size:11px;">${p.fromLevel} → <strong>${p.toLevel}</strong></td>
+      <td style="text-align:center;">${p.preP == null ? '—' : p.preP}</td>
+      <td style="text-align:center;">${p.postP == null ? '—' : p.postP}</td>
+      <td style="text-align:center;color:${dpColor};font-weight:600;">${fmt(dp, 'P')}</td>
+      <td style="text-align:center;">${p.preRest == null ? '—' : p.preRest + 'd'} → ${p.postRest == null ? '—' : p.postRest + 'd'} <span style="color:${drColor};font-weight:600;">(${fmt(dr, 'd')})</span></td>
+      <td style="text-align:center;color:${dvColor};font-weight:600;">${fmt(p.velDelta, 'mph')}</td>
+      <td style="text-align:center;">${p.recoveryStarts == null ? '—' : p.recoveryStarts}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('promotions-content').innerHTML = `
+    <h2>Promotions — pre/post 3-start snapshots</h2>
+    <p class="lede">Each row is a level transition (Low-A → High-A, High-A → AA, etc.) detected from the <code>teamWithLevel</code> field in the CSV. Pre-3 = mean across the three starts immediately before the move. Post-3 = the three starts immediately after. <strong>Recovery</strong> = number of post-promo starts before pitch count first reaches the pre-promo mean (8-start lookahead; "—" = did not recover within the window).</p>
+    <p class="lede" style="font-size:12px;"><strong>Caveats:</strong> 3-start windows are thin and noisy; one bad start swings the mean. We don't normalize for opponent or schedule. Velocity comparisons can shift simply because radar guns / parks differ across affiliates. Read each row as a single case, not as proof of an org pattern.</p>
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Promotions detected</div><div class="stat-value">${all.length}</div></div>
+      <div class="stat"><div class="stat-label">Pitchers promoted</div><div class="stat-value">${new Set(all.map(a => a.name)).size}</div></div>
+      <div class="stat"><div class="stat-label">Mean Δ pitch count</div><div class="stat-value">${fmt(meanDp, 'P')}</div></div>
+      <div class="stat"><div class="stat-label">Mean Δ rest</div><div class="stat-value">${fmt(meanDr, 'd')}</div></div>
+      <div class="stat"><div class="stat-label">Mean Δ velocity</div><div class="stat-value">${fmt(meanDv, 'mph')}</div></div>
+      <div class="stat"><div class="stat-label">Median recovery starts</div><div class="stat-value">${meanRecov == null ? '—' : meanRecov.toFixed(1)}</div></div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Org</th>
+        <th>Pitcher</th>
+        <th>Date</th>
+        <th>Transition</th>
+        <th style="text-align:center;">Pre-3 P</th>
+        <th style="text-align:center;">Post-3 P</th>
+        <th style="text-align:center;">Δ P</th>
+        <th style="text-align:center;">Rest pre → post (Δ)</th>
+        <th style="text-align:center;">Δ Vel</th>
+        <th style="text-align:center;">Recovery</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
   `;
 }
 
@@ -1465,25 +2145,59 @@ function renderBest() {
 
 function renderAges() {
   const a = OVERVIEW.age_analysis;
-  const groupsHtml = a.groups.map(g => `
+  const groupsHtml = a.groups.map(g => {
+    const ciSweet = g.ci_sweet_pct ? `<div class="stat-sub">[${g.ci_sweet_pct[0].toFixed(0)}, ${g.ci_sweet_pct[1].toFixed(0)}]</div>` : (g.n <= 1 ? '<div class="stat-sub">n=1, no CI</div>' : '');
+    const ciP = g.ci_max_p ? `<div class="stat-sub">[${g.ci_max_p[0].toFixed(0)}, ${g.ci_max_p[1].toFixed(0)}]</div>` : '';
+    const ciIp = g.ci_ip ? `<div class="stat-sub">[${g.ci_ip[0].toFixed(0)}, ${g.ci_ip[1].toFixed(0)}]</div>` : '';
+    return `
     <div class="age-group-card">
       <div class="age-group-head"><div class="age-group-label">${g.label}</div><div class="age-group-n">n = ${g.n}</div></div>
       <div class="age-group-stats">
-        <div><div class="stat-label">avg IP</div><div class="stat-value">${g.avg_ip}</div></div>
-        <div><div class="stat-label">avg max P</div><div class="stat-value">${g.avg_max_p}</div></div>
-        <div><div class="stat-label">avg sweet %</div><div class="stat-value">${g.avg_sweet_pct}%</div></div>
+        <div><div class="stat-label">avg IP</div><div class="stat-value">${g.avg_ip}</div>${ciIp}</div>
+        <div><div class="stat-label">avg max P</div><div class="stat-value">${g.avg_max_p}</div>${ciP}</div>
+        <div><div class="stat-label">avg in-band %</div><div class="stat-value">${g.avg_sweet_pct}%</div>${ciSweet}</div>
       </div>
       <div class="age-group-pitchers">${g.pitchers.map(p => `<a href="#pitchers/${p}" style="color:var(--text-muted);text-decoration:none;border-bottom:1px dotted;">${p}</a>`).join(' · ')}</div>
       <div class="age-group-takeaway">${g.takeaway}</div>
     </div>
-  `).join('');
+  `;}).join('');
   const conclusionsHtml = a.conclusions.map(c => `<div class="finding"><div class="finding-body">${c}</div></div>`).join('');
+
+  // Background split (prep / college / international / unknown). Structurally
+  // present; populated where the draft string + age-at-draft was unambiguous.
+  let bgHtml = '';
+  if (typeof BACKGROUND_STATS !== 'undefined' && BACKGROUND_STATS) {
+    const order = ['prep', 'college', 'international', 'unknown'];
+    const rows = order.filter(k => BACKGROUND_STATS[k]).map(k => {
+      const s = BACKGROUND_STATS[k];
+      const ci = s.ci_sweet_pct ? ` <span style="font-size:10px;color:var(--text-tertiary);">[${s.ci_sweet_pct[0].toFixed(0)}, ${s.ci_sweet_pct[1].toFixed(0)}]</span>` : '';
+      return `<tr>
+        <td><strong>${k}</strong></td>
+        <td style="text-align:center;">${s.n}</td>
+        <td style="text-align:center;">${s.avg_ip}</td>
+        <td style="text-align:center;">${s.avg_max_p}</td>
+        <td style="text-align:center;">${s.avg_sweet_pct}%${ci}</td>
+        <td style="text-align:center;">${s.avg_p_per_ip == null ? '—' : s.avg_p_per_ip}</td>
+        <td style="font-size:10px;color:var(--text-muted);">${s.pitchers.join(' · ')}</td>
+      </tr>`;
+    }).join('');
+    bgHtml = `
+      <h3 style="margin-top:32px;">Split by amateur background</h3>
+      <p class="lede" style="font-size:12.5px;">Prep / college / international / unknown — populated from draft string + age-at-draft where unambiguous; left as <em>unknown</em> otherwise. <strong>n is small per background — directional only.</strong> Sweet% bracketed values are 90% bootstrap CIs.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Background</th><th style="text-align:center;">n</th><th style="text-align:center;">avg IP</th><th style="text-align:center;">avg max P</th><th style="text-align:center;">avg in-band %</th><th style="text-align:center;">avg P/IP</th><th>pitchers</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    `;
+  }
+
   document.getElementById('ages-content').innerHTML = `
     <h2>${a.title}</h2>
     <p class="lede">${a.intro}</p>
     ${groupsHtml}
-    <h3>Conclusions</h3>
+    <h3>Observations across age groups</h3>
     ${conclusionsHtml}
+    ${bgHtml}
   `;
 }
 
@@ -1612,7 +2326,7 @@ function renderShortStarts() {
   document.getElementById('shorts-content').innerHTML = `
     <h2>How organizations handle unprompted short starts</h2>
     <p class="lede">
-      A "short" start = less than 4.0 IP <em>and</em> at least 2 full innings shorter than the previous start. This isolates the "chased out of a game" scenario from consistent opener/piggyback roles. The key question: <strong>when a starter gets pulled early, does the org rebuild him or drop him back into a normal workload?</strong>
+      A <strong>true short-workload</strong> start = less than 4.0 IP <em>and</em> at least 2 full innings shorter than the previous start <em>and</em> the pitch count was also at most 80% of the previous start's pitch count. The pitch-count guard is the new piece: it removes outings where IP collapsed but the pitch count was held — those are <strong>inefficient low-IP outings</strong>, surfaced in their own table below. The key descriptive question: <strong>when a starter is pulled early on light pitches, does the next start come back at a tempered level or jump back to normal workload?</strong>
     </p>
     <p class="lede" style="font-size:12.5px;">
       Two framing lenses: <strong>% of pre-short start</strong> = did the org temper the NEXT start relative to what the pitcher was doing right before the chase? <strong>% of season-max-to-date</strong> = is that next start low relative to what the pitcher has carried all year? Both are reported so you can read the same event two ways. Median next-start-as-% of pre-short across the dataset: <strong>${globalMedian}</strong> (mean ${globalMean}). ${S.totalEvents} qualifying events across ${S.totalPitchersWithShort} of ${Object.keys(PITCHER_DATA).length} pitchers.
@@ -1651,6 +2365,34 @@ function renderShortStarts() {
       </tr></thead>
       <tbody>${eventRows}</tbody>
     </table></div>
+
+    ${(typeof INEFFICIENT_STARTS !== 'undefined' && INEFFICIENT_STARTS && INEFFICIENT_STARTS.totalEvents > 0) ? `
+      <h3 style="margin-top:32px;">Inefficient low-IP outings — same pitch count crammed into fewer innings</h3>
+      <p class="lede" style="font-size:12.5px;">
+        These are &lt;4 IP starts where the pitch count was held (or rose) relative to the previous start — a high-stress outing, <strong>not a short-workload event</strong>. Surfaced separately so the bucket above stays clean. Mean P/IP across these events: <strong>${INEFFICIENT_STARTS.globalMeanPperIp == null ? '—' : INEFFICIENT_STARTS.globalMeanPperIp}</strong> (vs. roughly 15–17 P/IP on a typical start).
+      </p>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Org</th><th>Pitcher</th><th>Year</th><th>Date</th>
+          <th>Previous start</th><th>This outing</th><th>P/IP</th><th>% of prev P</th>
+        </tr></thead>
+        <tbody>${INEFFICIENT_STARTS.events.map(e => {
+          const color = ORG_COLOR[e.org] || '#888';
+          const ppiColor = e.pPerIp != null && e.pPerIp >= 22 ? 'var(--danger)' : e.pPerIp != null && e.pPerIp >= 18 ? 'var(--warn)' : 'var(--text-muted)';
+          return `<tr onclick="location.hash='pitchers/${e.pitcher}'" style="cursor:pointer;">
+            <td><span class="pill" style="background:${color}22;color:${color};">${e.org}</span></td>
+            <td><strong>${e.pitcher}</strong></td>
+            <td>${e.yr}</td>
+            <td>${e.sDate}</td>
+            <td>${e.prevIp} IP · ${e.prevP}P</td>
+            <td>${e.sIp} IP · ${e.sP}P</td>
+            <td style="color:${ppiColor};font-weight:600;">${e.pPerIp == null ? '—' : e.pPerIp}</td>
+            <td>${e.pctPrev}%</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      <p class="lede" style="font-size:11px;color:var(--text-tertiary);margin-top:8px;">Threshold: cur P / prev P &gt; 0.80 (vs. ≤ 0.80 for the true-short table above). Sensitivity to this 0.80 cutoff is reported on the <a href="#methodology" style="color:inherit;text-decoration:underline;">Methodology</a> tab.</p>
+    ` : ''}
 
     <h3>Takeaways (directional — small samples)</h3>
     <div class="finding"><div class="finding-title">Most orgs re-enter slightly below the pre-short workload, not above it</div><div class="finding-body">Median reframe across the full dataset sits near ${globalMedian}, meaning the typical org cuts the next start's pitch count modestly relative to the pre-short outing. Very few events show &gt;110% — orgs are not pushing pitchers harder after a chased start.</div></div>
@@ -1738,31 +2480,112 @@ function renderShortStarts() {
 // ============================================================================
 
 function renderMethodology() {
+  // Sensitivity grid panel (built from SENSITIVITY payload)
+  let sensHtml = '';
+  if (typeof SENSITIVITY !== 'undefined' && SENSITIVITY) {
+    const labelMap = {
+      sweet_bounds: 'In-band ACWR % (global mean)',
+      spike_threshold: 'Total ACWR-spike events',
+      true_short_ratio: 'True short-workload events',
+      tempered_ratio: 'Tempered-start events',
+      high_stress_ppi: 'High-stress P/IP rate (%)'
+    };
+    const rows = Object.keys(SENSITIVITY).map(k => {
+      const v = SENSITIVITY[k];
+      const flag = v.threshold_sensitive ? ' <span class="pill pill-warn" style="font-size:9px;">threshold-sensitive</span>' : '';
+      const cell = (variant) => v[variant] ? `<td style="text-align:center;"><div style="font-size:10px;color:var(--text-tertiary);">${v[variant].label}</div><div style="font-weight:600;">${v[variant].value == null ? '—' : v[variant].value}</div></td>` : '<td>—</td>';
+      // Each metric has 'default' + two alternative variants
+      const variantKeys = Object.keys(v).filter(x => x !== 'threshold_sensitive');
+      return `<tr>
+        <td><strong>${labelMap[k] || k}</strong>${flag}</td>
+        ${variantKeys.map(cell).join('')}
+      </tr>`;
+    }).join('');
+    sensHtml = `
+      <h3 style="margin-top:32px;">Sensitivity to thresholds</h3>
+      <p>Headline metrics under three threshold variants per knob. <strong>threshold-sensitive</strong> = at least one variant moves &gt; ±25% from the default. Read this as a calibration check: where a variant is flagged, do not over-interpret the headline number.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Metric</th><th style="text-align:center;">Default</th><th style="text-align:center;">Variant A</th><th style="text-align:center;">Variant B</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    `;
+  }
+
   document.getElementById('methodology-content').innerHTML = `
     <h2>Methodology</h2>
+    <h3>What this study is</h3>
+    <p>A descriptive study of how MLB organizations manage young, valued starting pitchers during their <strong>first full affiliated MiLB season</strong>. The unit of analysis is the in-game starter outing: pitch counts, rest days, IP, velocity, strike%, and derived metrics (ACWR, P/IP, P/BF). All findings are descriptive — we report what we saw, not what should happen.</p>
+    <h3>What this study is not</h3>
+    <ul>
+      <li>Not a measure of total throwing workload. Bullpens, side work, catch play, pregame, and live BP are not in the CSVs and are not included in any metric on this site.</li>
+      <li>Not an injury prediction model. We list known injury context for transparency; we do not use it as an outcome label or a target.</li>
+      <li>Not a "best practices" guide. Where the data shows orgs that managed a season cleanly, we describe what they did — we do not claim it caused the outcome.</li>
+      <li>Not a leaderboard. Per-org rollups are demoted into a collapsed section; sample sizes are small per org and the comparison is fragile.</li>
+    </ul>
+    <h3>Inclusion criteria</h3>
+    <p>A pitcher qualifies for the cohort when ALL of the following hold:</p>
+    <ul>
+      <li>Started in April of the season covered by the CSV (no late call-ups, no rehab-only seasons).</li>
+      <li>Accumulated enough starts that org-level usage patterns become visible (≥ ~17 starts in this sample).</li>
+      <li>Was a valued org asset — top draft pick, notable IFA bonus, or known top-30 prospect — so org behavior reflects deliberate management rather than disposable depth-arm usage.</li>
+      <li>The CSV covers the pitcher's first full affiliated MiLB season (<code>firstFullSeason: true</code> in metadata).</li>
+    </ul>
+    <p>Survivorship bias is intentional. We are deliberately filtering to arms whose seasons produced enough innings for management patterns to be readable. A pitcher who blew out in April or never reached affiliated ball would not show us anything about in-season management decisions.</p>
+    <h3>Limitations</h3>
+    <ul>
+      <li>n is small. 24 pitchers across 11 orgs; most orgs are 1–3 pitchers. All aggregates carry wide uncertainty (90% bootstrap CIs reported on org and age rollups).</li>
+      <li>The CSV cannot disambiguate intent from circumstance. A 4 IP / 50P outing might be a planned tempering, a rainout-shortened start, or a pitcher chased after a poor inning. Where we surface "tempered starts" or "scheduling response," read these as <em>events worth investigating</em>, not as confirmed org philosophy.</li>
+      <li>Velocity comparisons across affiliates can shift due to differences in radar guns, parks, and operators — not just the pitcher.</li>
+      <li>"Background" (prep / college / international) is populated where the draft string + age-at-draft is unambiguous; "unknown" remains where it is not.</li>
+    </ul>
     <h3>Data source</h3>
-    <p>TruMedia pitching KPIs export, full-season game logs. Game-by-game records include date, opponent, IP, pitches, result, strike rate, velocity, breaking ball metrics, and batted ball outcomes. This analysis focuses on IP, pitches, rest days, and derived workload metrics.</p>
+    <p>TruMedia pitching KPIs export, full-season game logs. Game-by-game records include date, opponent, IP, pitches, BF, result, strike rate, velocity, breaking ball metrics, and batted ball outcomes. This analysis uses IP, pitches, BF, rest days, velocity, strike%, and derived workload metrics.</p>
     <h3>ACWR calculation</h3>
     <p>Uncoupled rolling 4-start ACWR, adapted from Gabbett (2016) for starting pitchers on a weekly rotation:</p>
     <div class="kpi-block"><div class="kpi-block-label">formula</div><div class="kpi-block-value">ACWR<sub>i</sub> = P<sub>i</sub> / mean(P<sub>i-3</sub>, P<sub>i-2</sub>, P<sub>i-1</sub>)</div></div>
-    <p>Valid for starts i ≥ 4. Pitchers with fewer than 4 starts (i.e. no ACWR-eligible window) are excluded from org/age sweet%-max-ACWR averages; they are still listed in per-pitcher volume counts. Interpretation bounds are inclusive on both ends of each range:</p>
+    <p>Valid for starts i ≥ 4. Pitchers with fewer than 4 starts are excluded from org/age in-band % and max-ACWR averages; they are still listed in per-pitcher volume counts. <strong>ACWR alone can mislead</strong>, especially when the chronic baseline is low or volatile — we always pair it with raw pitch counts. Interpretation bounds (inclusive):</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>Range (inclusive bounds)</th><th>Interpretation</th></tr></thead>
+      <thead><tr><th>Range (inclusive bounds)</th><th>Common reference label</th></tr></thead>
       <tbody>
-        <tr><td>&gt; 1.50</td><td>Spike / elevated injury risk zone</td></tr>
-        <tr><td>1.31 – 1.50</td><td>High load — monitor</td></tr>
-        <tr><td>0.80 – 1.30</td><td>Sweet spot — optimal load management</td></tr>
-        <tr><td>0.50 – 0.79</td><td>Undertraining / detraining</td></tr>
-        <tr><td>&lt; 0.50</td><td>Rapid deload (typical post-injury or first start back)</td></tr>
+        <tr><td>&gt; 1.50</td><td>Spike — large jump vs. recent baseline</td></tr>
+        <tr><td>1.31 – 1.50</td><td>Elevated relative to baseline</td></tr>
+        <tr><td>0.80 – 1.30</td><td>Reference band ("sweet spot" in the literature)</td></tr>
+        <tr><td>0.50 – 0.79</td><td>Below baseline (deload / piggyback / shortened)</td></tr>
+        <tr><td>&lt; 0.50</td><td>Sharp drop (typical post-injury or first start back)</td></tr>
       </tbody>
     </table></div>
-    <p>Uncoupled (exclude current start from chronic baseline) over coupled because the prior-3-start average better reflects what the pitcher has been accustomed to.</p>
-    <h3>Org rankings — what they are and are not</h3>
-    <p>The org-ranking "sweet %" numbers on the Overview tab are an <strong>unweighted mean</strong> across that org's sampled pitchers. A pitcher with 8 starts weighs the same as a pitcher with 28 starts. This is a deliberate simplicity trade-off given the small per-org samples; <strong>where an org has only one or two pitchers the ranking is directional, not a team-wide claim</strong>. Only NYM (n=2) and ATL (n=3) have multiple full-season samples; most other orgs in the dataset currently sit at n=1 or n=2. Read the ranking as a starting point, then drill into the individual pitcher pages.</p>
-    <h3>Short-start definition</h3>
-    <p>A start qualifies as "short" when BOTH: (1) less than 4.0 IP AND (2) at least 2 full innings shorter than the previous start. There is no explicit exclusion for pitchers who are consistently short (e.g. piggyback or opener roles); rather, the "≥2 IP shorter than the previous start" guard <em>naturally</em> filters out uniform short-usage because a uniformly short pattern never creates a 2-IP drop against its own baseline. We only flag the "chased from a game he was expected to go deep in" scenario.</p>
+    <p>Uncoupled (exclude current start from chronic baseline) preferred over coupled because the prior-3-start average better reflects what the pitcher has been accustomed to.</p>
+    <h3>Short-start definitions (split into two buckets)</h3>
+    <p><strong>True short-workload start.</strong> All three of: (1) &lt; 4.0 IP, (2) ≥ 2 full IP shorter than the previous start, (3) cur P ≤ 80% of prev P. The pitch-count guard removes outings where IP collapsed but the pitch count was held — those are surfaced separately. This bucket is what feeds the bounce-back / re-entry analysis.</p>
+    <p><strong>Inefficient low-IP start.</strong> &lt; 4.0 IP and ≥ 2 IP shorter than previous, but cur P &gt; 80% of prev P. Same low-IP outing, but the workload was held — a high-stress / inefficient outing, not a short-workload event. Reported in its own table on the Short-starts tab.</p>
     <h3>"% of previous" framing</h3>
-    <p>For short-start aftermath, the NEXT start's pitch count is compared to the PRE-SHORT start (the one before the short one). This answers: did the org plan a shorter next outing, or restart normal workload?</p>
+    <p>For true-short aftermath, the NEXT start's pitch count is compared to the PRE-SHORT start (the one before the short one). This describes whether the next outing was tempered relative to the workload the pitcher was carrying right before the short.</p>
+    <h3>Volatility, efficiency, rest-instability, velocity-response, promotions</h3>
+    <p>Per-pitcher metrics: ACWR SD / CV, count of crossings of 1.3 and 1.5; mean P/IP and P/BF, share of starts at P/IP ≥ 18 (high-stress rate); rest SD, share at exactly 7 days, compressed-rest count (≤4d) and long-rest count (≥10d). For five event types (ACWR spike, compressed rest, true-short, long gap, promotion) we report mean Vel4S across the 2 starts before vs. the 2 starts after. Promotions are detected from the <code>teamWithLevel</code> field; we report pre/post 3-start means on pitches, ACWR, rest, and velocity, plus the number of post-promo starts before pitch count returned to the pre-promo mean (8-start lookahead).</p>
+    <h3>Uncertainty bands</h3>
+    <p>All org and age aggregates are reported with 90% bootstrap CIs (n_iter=1000, fixed seed for reproducibility). With n as small as 1–3 per org, CIs are wide — that is honest, not a flaw. n=1 rows show "n=1, no CI" rather than a fake interval.</p>
+    ${sensHtml}
+    <h3>Age group definitions</h3>
+    <p>18-19yo, 20-21yo, 22+yo. Age is as of the season covered by the CSV (not current age). For pitchers who turned 20 during the season, they are in the 18-19 group if they were 19 at season start.</p>
+    <h3>Weather caveat</h3>
+    <p>CSV data does not include weather fields. Unusual gaps (8+ days without known injury or All-Star break) may reflect weather-related rainouts. Short rest windows (&lt; 5 days) can indicate compressed rotations after rainouts. Attribution of suspicious gaps is tracked in <code>data/weather_flags.json</code> based on reporting and game-log context.</p>
+    <h3>Repo structure</h3>
+    <div class="kpi-block"><div class="kpi-block-value" style="font-family:monospace;white-space:pre;font-size:11px;">pitcher-workload-research/
+├── data/
+│   ├── csvs/              TruMedia exports — drop new ones here
+│   ├── metadata.json      Pitcher meta (org, yr, age, draft, background, firstFullSeason)
+│   ├── injury_flags.json  Per-pitcher injury context
+│   ├── weather_flags.json Per-pitcher gap attribution
+│   ├── org_findings.json  Per-org qualitative writeups
+│   └── overview_findings.json  Top-level patterns and callouts
+├── scripts/
+│   └── build.py           Regenerates docs/index.html
+├── docs/
+│   └── index.html         The deliverable (GitHub Pages)
+└── README.md</div></div>
+    <p>To add a pitcher: drop CSV in data/csvs/, add entry to metadata.json (set <code>firstFullSeason</code> and <code>background</code>), optionally add injury/weather notes, run scripts/build.py, commit &amp; push.</p>
+  `;
+}
     <h3>Age group definitions</h3>
     <p>18-19yo, 20-21yo, 22+yo. Age is as of the season covered by the CSV (not current age). For pitchers who turned 20 during the season, they're in the 18-19 group if they were 19 at season start.</p>
     <h3>Weather caveat</h3>
@@ -1793,6 +2616,7 @@ renderOverview();
 renderPitcherSubnav();
 renderOrgSubnav();
 renderShortStarts();
+renderPromotions();
 renderBest();
 renderAges();
 renderMethodology();
