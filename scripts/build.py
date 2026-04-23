@@ -1318,6 +1318,145 @@ sensitivity_grid = compute_sensitivity_grid(pitcher_data, meta, insufficient_his
 n_sensitive = sum(1 for v in sensitivity_grid.values() if v.get('threshold_sensitive'))
 print(f"  sensitivity grid: {n_sensitive}/{len(sensitivity_grid)} metrics flagged threshold-sensitive (±25%)", file=sys.stderr)
 
+# -----------------------------------------------------------------------------
+# League-wide baseline (60+ IP MiLB starters/role-players, 18-22, 2023/2024/2025)
+# Source: data/csvs/2nd set/{year} Pitchers 18-22 60IP.csv
+# These are aggregated season totals (not per-game), used to give each org-page
+# population context. Read once at build time; emitted to JS as LEAGUE_BASELINE
+# and ORG_LEAGUE_POSITION.
+# -----------------------------------------------------------------------------
+
+def _age_bucket(age_avg):
+    try:
+        a = float(age_avg)
+    except (TypeError, ValueError):
+        return None
+    if a < 20.0:   return '18-19'
+    if a < 22.0:   return '20-21'
+    return '22+'
+
+def _safe_pct(s):
+    """Parse '64.6%' or '64.6' → 64.6 (float)."""
+    if s is None: return None
+    s = str(s).strip()
+    if not s or s in ('—', '-', 'NA', 'N/A'): return None
+    if s.endswith('%'): s = s[:-1]
+    try: return float(s)
+    except ValueError: return None
+
+def load_league_baseline():
+    """
+    Returns:
+      LEAGUE_BASELINE[year][org_or_'__ALL__'][bucket_or_'__ALL__'] = {
+          n, ip_mean, ip_median, gs_mean, p_mean, p_per_start_mean,
+          k_pct_mean, strike_pct_mean, vel4s_mean
+      }
+    Pitches-per-start denominator filters to GS >= 5 (skip mostly-relievers).
+    """
+    league_dir = DATA / "csvs" / "2nd set"
+    files = {
+        2023: league_dir / "2023 Pitchers 18-22 60IP.csv",
+        2024: league_dir / "2024 Pitchers 18-22 60IP.csv",
+        2025: league_dir / "2025 Pitchers 18-22 60IP.csv",
+    }
+    out = {}
+    for year, path in files.items():
+        if not path.exists():
+            print(f"  WARNING: {path} not found; skipping league baseline for {year}", file=sys.stderr)
+            continue
+        rows = []
+        with open(path, encoding='utf-8') as f:
+            for r in csv.DictReader(f):
+                org = (r.get('newestOrg') or r.get('currentOrg') or '').strip()
+                bucket = _age_bucket(r.get('SeasonAgeAvg'))
+                if not org or not bucket: continue
+                rows.append({
+                    'org': org, 'bucket': bucket,
+                    'ip': _safe_float(r.get('IP')),
+                    'gs': _safe_int(r.get('GS')),
+                    'p':  _safe_int(r.get('P')),
+                    'k_pct': _safe_pct(r.get('K%')),
+                    'strike_pct': _safe_pct(r.get('Strike%')),
+                    'vel4s': _safe_float(r.get('Vel4S')),
+                })
+        # Group by org × bucket (and __ALL__ rollups)
+        out[year] = {}
+        groups = {}
+        for r in rows:
+            for org_key in (r['org'], '__ALL__'):
+                for buck_key in (r['bucket'], '__ALL__'):
+                    groups.setdefault(org_key, {}).setdefault(buck_key, []).append(r)
+        for org_key, buckets in groups.items():
+            out[year][org_key] = {}
+            for buck_key, items in buckets.items():
+                ips    = [x['ip'] for x in items if x['ip'] is not None]
+                gss    = [x['gs'] for x in items]
+                ps     = [x['p']  for x in items if x['p']  is not None]
+                ppstart= [x['p'] / x['gs'] for x in items if x['p'] is not None and x['gs'] and x['gs'] >= 5]
+                ks     = [x['k_pct'] for x in items if x['k_pct'] is not None]
+                strs   = [x['strike_pct'] for x in items if x['strike_pct'] is not None]
+                vels   = [x['vel4s'] for x in items if x['vel4s'] is not None]
+                out[year][org_key][buck_key] = {
+                    'n': len(items),
+                    'ip_mean':         round(_mean(ips), 1)        if ips else None,
+                    'ip_median':       round(_median(ips), 1)      if ips else None,
+                    'gs_mean':         round(_mean(gss), 1)        if gss else None,
+                    'p_mean':          round(_mean(ps))             if ps else None,
+                    'p_per_start_mean':round(_mean(ppstart), 1)    if ppstart else None,
+                    'k_pct_mean':      round(_mean(ks), 1)         if ks else None,
+                    'strike_pct_mean': round(_mean(strs), 1)       if strs else None,
+                    'vel4s_mean':      round(_mean(vels), 1)       if vels else None,
+                }
+    return out
+
+def compute_org_league_position(league_baseline, ref_year=2025, ref_bucket='__ALL__'):
+    """
+    For each org present in the latest year, compute its rank among the 30 orgs
+    on each metric (1 = highest). Used for the per-org-page 'X of N' chips.
+    Returns:
+      ORG_LEAGUE_POSITION[org] = {
+        'year': ref_year, 'of_n': N,
+        'metrics': {metric: {rank, value, p25, p50, p75}}
+      }
+    """
+    if ref_year not in league_baseline:
+        return {}
+    year_data = league_baseline[ref_year]
+    org_codes = [o for o in year_data if o != '__ALL__']
+    metrics = ['ip_mean', 'p_per_start_mean', 'gs_mean', 'k_pct_mean', 'strike_pct_mean', 'vel4s_mean']
+    # Build: per-metric, list of (org, value) sorted desc
+    out = {}
+    of_n = len(org_codes)
+    for m in metrics:
+        vals = []
+        for o in org_codes:
+            v = year_data[o].get(ref_bucket, {}).get(m)
+            if v is not None: vals.append((o, v))
+        vals.sort(key=lambda t: -t[1])
+        # Compute quartiles across the values
+        nums = sorted(v for _, v in vals)
+        if not nums:
+            continue
+        def _q(p):
+            idx = int(round((len(nums) - 1) * p))
+            return nums[max(0, min(idx, len(nums)-1))]
+        p25, p50, p75 = _q(0.25), _q(0.50), _q(0.75)
+        for rank, (o, v) in enumerate(vals, start=1):
+            out.setdefault(o, {'year': ref_year, 'of_n': of_n, 'metrics': {}})
+            out[o]['metrics'][m] = {
+                'rank': rank, 'value': v,
+                'p25': p25, 'p50': p50, 'p75': p75,
+            }
+    return out
+
+league_baseline = load_league_baseline()
+n_seasons = sum(d.get('__ALL__', {}).get('__ALL__', {}).get('n', 0) for d in league_baseline.values())
+print(f"  league baseline loaded: {n_seasons} pitcher-seasons across {len(league_baseline)} year files", file=sys.stderr)
+
+org_league_position = compute_org_league_position(league_baseline, ref_year=2025)
+print(f"  org league positions computed for {len(org_league_position)} orgs (2025 60+ IP pop)", file=sys.stderr)
+
+
 # Override the numeric fields in overview.age_analysis.groups with auto-computed
 # values. Keep the prose (label, takeaway) from JSON; replace the numbers so
 # they never go stale when pitchers are added.
@@ -1343,7 +1482,8 @@ if 'age_analysis' in overview and 'groups' in overview['age_analysis']:
 ORG_COLOR = {
     'MIL': '#BA7517', 'SEA': '#185FA5', 'NYM': '#534AB7', 'ATL': '#A32D2D',
     'TB': '#1D9E75', 'CLE': '#D4537E', 'NYY/CHW': '#5F5E5A', 'LAD': '#378ADD',
-    'MIA': '#0F766E', 'NYY': '#D0D6D9', 'CLE/WAS': '#E4572E', 'WAS': '#AB0003'
+    'MIA': '#0F766E', 'NYY': '#D0D6D9', 'CLE/WAS': '#E4572E', 'WAS': '#AB0003',
+    'DET': '#0C2340', 'BOS': '#BD3039'
 }
 
 # Inject ORG_COLOR and order into overview.
@@ -1374,6 +1514,8 @@ js_payload = {
     'SENSITIVITY': sensitivity_grid,
     'INSUFFICIENT_HISTORY': insufficient_history,
     'ORG_COLOR': ORG_COLOR,
+    'LEAGUE_BASELINE': league_baseline,
+    'ORG_LEAGUE_POSITION': org_league_position,
     'GENERATED': dt.datetime.now().strftime('%B %Y')
 }
 
@@ -1506,6 +1648,20 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
 .org-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
 .org-header h2 { margin: 0; }
 .org-pitchers { font-size: 12px; color: var(--text-muted); }
+.league-context { background: var(--bg-subtle); border-radius: 10px; padding: 10px 12px 8px; margin-bottom: 14px; border: 1px solid var(--border); }
+.league-context-header { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); margin-bottom: 6px; }
+.league-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.league-chip { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 110px; display: flex; flex-direction: column; gap: 1px; font-size: 12px; }
+.league-chip-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
+.league-chip strong { font-size: 13px; color: var(--text); }
+.league-chip-val { color: var(--text-muted); font-size: 11px; }
+.league-chip-pop { color: var(--text-tertiary); font-size: 10px; font-style: italic; }
+.league-context-detail { margin-top: 8px; }
+.league-context-detail summary { font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 4px 0; }
+.league-context-table { font-size: 11px; }
+.league-context-table th, .league-context-table td { padding: 4px 6px; text-align: right; }
+.league-context-table th:first-child, .league-context-table td:first-child { text-align: left; }
+.league-context-table .league-pop { color: var(--text-tertiary); }
 .finding { margin-bottom: 14px; }
 .finding-title { font-weight: 600; font-size: 13px; margin-bottom: 3px; }
 .finding-body { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
@@ -1586,7 +1742,7 @@ js_data = "const PAYLOAD = " + json.dumps(js_payload, default=str) + ";"
 
 # Load the runtime JS (separated for readability)
 app_js = r"""
-const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, TEMPERED_STARTS, SCHEDULING_RESPONSE, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR, INEFFICIENT_STARTS, BACKGROUND_STATS, ORG_AGGREGATES, VOLATILITY, EFFICIENCY, REST_INSTABILITY, VELOCITY_RESPONSE, PROMOTIONS, SENSITIVITY } = PAYLOAD;
+const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, TEMPERED_STARTS, SCHEDULING_RESPONSE, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR, INEFFICIENT_STARTS, BACKGROUND_STATS, ORG_AGGREGATES, VOLATILITY, EFFICIENCY, REST_INSTABILITY, VELOCITY_RESPONSE, PROMOTIONS, SENSITIVITY, LEAGUE_BASELINE, ORG_LEAGUE_POSITION } = PAYLOAD;
 
 // ============================================================================
 // Helpers
@@ -1991,6 +2147,47 @@ function renderOrgSubnav() {
   document.getElementById('org-subnav').innerHTML = html;
 }
 
+// League-context ribbon: where this org ranks among the 30 orgs in the 2025
+// 60+ IP MiLB population (18-22 starters/role-players). Aggregated season
+// totals only — directional, not start-by-start.
+function renderLeagueContext(key) {
+  // Most org keys map 1:1 to LEAGUE_BASELINE keys. Composite tags like 'NYY/CHW'
+  // or 'CLE/WAS' don't have a league row — pick the primary.
+  const lookup = key.includes('/') ? key.split('/')[0] : key;
+  const pos = ORG_LEAGUE_POSITION && ORG_LEAGUE_POSITION[lookup];
+  if (!pos) return '';
+  const m = pos.metrics || {};
+  const labelMap = {
+    p_per_start_mean: 'P/start',
+    ip_mean: 'IP',
+    gs_mean: 'GS',
+    vel4s_mean: 'Vel4S',
+    k_pct_mean: 'K%',
+    strike_pct_mean: 'Strike%',
+  };
+  // Primary 4 chips: P/start, IP, GS, Vel4S
+  const chipKeys = ['p_per_start_mean', 'ip_mean', 'gs_mean', 'vel4s_mean'];
+  const chips = chipKeys.filter(k => m[k]).map(k => {
+    const r = m[k];
+    const ord = (n) => { const j = n%10, j100 = n%100; if (j===1&&j100!==11) return n+'st'; if (j===2&&j100!==12) return n+'nd'; if (j===3&&j100!==13) return n+'rd'; return n+'th'; };
+    return `<div class="league-chip"><span class="league-chip-label">${labelMap[k]}</span><strong>${ord(r.rank)} of ${pos.of_n}</strong><span class="league-chip-val">${typeof r.value === 'number' ? r.value.toFixed(1) : r.value}</span><span class="league-chip-pop">pop p50 ${typeof r.p50 === 'number' ? r.p50.toFixed(1) : r.p50}</span></div>`;
+  }).join('');
+  if (!chips) return '';
+  // Per-bucket breakdown table (org vs all-30 by age bucket)
+  const yr = pos.year;
+  const yearData = (LEAGUE_BASELINE && LEAGUE_BASELINE[yr]) || {};
+  const orgData = yearData[lookup] || {};
+  const allData = yearData['__ALL__'] || {};
+  const buckets = ['18-19', '20-21', '22+'];
+  const bucketRows = buckets.map(b => {
+    const o = orgData[b]; const a = allData[b];
+    if (!o || !o.n) return '';
+    return `<tr><td><strong>${b}</strong></td><td>${o.n}</td><td>${o.ip_mean ?? '—'}</td><td>${o.gs_mean ?? '—'}</td><td>${o.p_per_start_mean ?? '—'}</td><td>${o.vel4s_mean ?? '—'}</td><td class="league-pop">${a ? a.ip_mean : '—'}</td><td class="league-pop">${a ? a.gs_mean : '—'}</td><td class="league-pop">${a ? a.p_per_start_mean : '—'}</td></tr>`;
+  }).filter(x => x).join('');
+  const tableHtml = bucketRows ? `<details class="league-context-detail"><summary>Per-age-bucket breakdown — ${lookup} vs full 30-org population (${yr})</summary><div class="table-wrap"><table class="league-context-table"><thead><tr><th rowspan="2">Age</th><th rowspan="2">${lookup} n</th><th colspan="4">${lookup} mean</th><th colspan="3">All-30 mean</th></tr><tr><th>IP</th><th>GS</th><th>P/start</th><th>Vel4S</th><th>IP</th><th>GS</th><th>P/start</th></tr></thead><tbody>${bucketRows}</tbody></table></div></details>` : '';
+  return `<div class="league-context"><div class="league-context-header">League position — ${yr} 60+ IP MiLB pop (18–22)${key !== lookup ? ` <span style="color:var(--text-tertiary);font-size:11px;">(showing ${lookup} for composite tag)</span>` : ''}</div><div class="league-chips">${chips}</div>${tableHtml}</div>`;
+}
+
 function renderOrg(key) {
   document.querySelectorAll('#org-subnav button').forEach(b => b.classList.toggle('active', b.dataset.org === key));
   const f = ORGS[key];
@@ -2019,6 +2216,7 @@ function renderOrg(key) {
 
   document.getElementById('org-detail').innerHTML = `
     <div class="org-header"><h2 style="color:${color};">${key}</h2><div class="org-pitchers">${orgPitchers.length} pitcher${orgPitchers.length > 1 ? 's' : ''}: ${orgPitchers.map(p => `<a href="#pitchers/${p}" style="color:${color};text-decoration:none;border-bottom:1px dotted;">${p}</a>`).join(', ')}</div></div>
+    ${renderLeagueContext(key)}
     <div class="stats-grid">
       <div class="stat"><div class="stat-label">Pitchers studied</div><div class="stat-value">${orgPitchers.length}</div></div>
       <div class="stat"><div class="stat-label">Avg starts/pitcher</div><div class="stat-value">${meanGS.toFixed(0)}</div></div>
