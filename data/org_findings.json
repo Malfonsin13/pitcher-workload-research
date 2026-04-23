@@ -1,15 +1,15 @@
 {
-  "_comment": "Per-organization qualitative findings. Update these whenever adding new pitchers shifts the narrative. Orgs with 3+ pitchers have fuller write-ups.",
+  "_comment": "Per-organization qualitative findings. Update these whenever adding new pitchers shifts the narrative. Orgs with 3+ pitchers have fuller write-ups. As of Round 4, several orgs have 'comparator' arms appended to the pitcher list — they show up in the per-org table but the original narrative writeups describe the originally-analyzed arms; see the table for the full sample.",
 
   "MIL": {
-    "pitchers": ["Birchard", "Meccage", "Knoth"],
-    "rhythm":   "Standard 6-day rotation rhythm — strictly adhered to across all three pitchers in dataset.",
+    "pitchers": ["Birchard", "Meccage", "Knoth", "Corniel", "M Rodriguez", "Torres"],
+    "rhythm":   "Standard 6-day rotation rhythm — strictly adhered to across the originally-analyzed arms (Birchard, Meccage, Knoth).",
     "cap":      "Pitch counts scale to level and experience: Birchard (High-A, established 22yo) up to 92P max, Knoth (Low-A, prep arm 18yo) 85P max, Meccage (Low-A, injury-disrupted 19yo) 82P max.",
     "buildup":  "Fast ramp for new pros (Meccage +3.8, Knoth +2.5), flat for established (Birchard already at 70s+ from Day 1).",
     "short":    "No skipped turns even after bad outings. Sends pitchers back on normal 6-day rest regardless of previous outcome. Bounce-backs at 85-115% of pre-short pitch count.",
     "injury":   "Meccage's 9/3 return was 14P / 1 IP after a 33-day absence — consistent with a limited first-outing-back pattern, though the CSV alone can't confirm this was a formal org protocol vs. an ad-hoc call.",
     "risk":     "Knoth's TJ (January 2025) had NO pitch count warning signs visible in the 2024 data. His ACWR never spiked above 1.25, pitch count range was 53-85P all year, and his final 5 starts showed no decline. This is a critical caveat for workload-based injury models — mechanical/tissue-level issues can be invisible in counting stats.",
-    "strengths":"Disciplined rest cycles, caps scaled to individual player profile, measured return-to-play pattern observed (Meccage 9/3 return).",
+    "strengths":"Disciplined rest cycles, caps scaled to individual player profile, measured return-to-play pattern observed (Meccage 9/3 return). Round-4 expansion (Corniel, M Rodriguez, Torres) gives MIL the deepest sample in the dataset (n=6) — see the per-pitcher table for individual profiles.",
     "concerns": "No pre-injury detection mechanism visible in volume data. Birchard's chronic workload shows signs of running hot in the middle of the year."
   },
 
@@ -50,25 +50,25 @@
   },
 
   "TB": {
-    "pitchers": ["Harrison", "Nichols", "Gill Hill"],
+    "pitchers": ["Harrison", "Nichols", "Gill Hill", "Urbina", "S Suarez"],
     "rhythm":   "7-day rhythm with flexibility — multiple 6-day compressed outings, several 8-day extensions. Less rigid than SEA but still disciplined. Willing to skip a turn (Harrison is the dataset's only confirmed skip).",
-    "cap":      "Aggressive caps — Harrison (20yo) hit 92P five times, Gill Hill (21yo) hit 92P, Nichols (21yo) hit 87P before his injury stints. 85-92P range is the TB working ceiling for this age group.",
+    "cap":      "Aggressive caps — Harrison (20yo) hit 92P five times, Gill Hill (21yo) hit 92P, Nichols (21yo) hit 87P before his injury stints. 85-92P range is the TB working ceiling for the originally-analyzed group.",
     "buildup":  "Fast ramp (Harrison +4.5P/start). Gill Hill smoother steady (+2.8). Nichols interrupted build by injuries.",
-    "short":    "Harrison is the ONLY pitcher in the full 24-pitcher dataset with a confirmed skipped turn after a short start (7/11/25 → 7/23/25). Nichols had multiple short starts driven by injury stints.",
+    "short":    "Harrison is the ONLY pitcher in the original 24-pitcher dataset with a confirmed skipped turn after a short start (7/11/25 → 7/23/25). Nichols had multiple short starts driven by injury stints.",
     "injury":   "Nichols had THREE IL stints in 2024 with a 'nagging injury' never publicly disclosed — same pattern as Meyer (MIA 2024). He bounced back in 2025 (14-3, promoted to AA), but the 2024 protocol of repeated short IL visits without resolving the underlying issue is a cautionary tale. Harrison's 12-day gap around the All-Star Break window was the longest ASB-adjacent rest in the dataset (+5d vs the league norm).",
-    "strengths":"Workhorse deployment for healthy arms (Harrison, Gill Hill both around 110 IP). Harrison's skipped turn after a short start is the only confirmed one in the 24-pitcher sample. Aggressive pitch counts at 20-21yo (n=3, all three pitchers are 20-21 — we don't have a TB arm outside that band to test whether the pattern extends to younger or older age groups).",
-    "concerns": "Nichols 2024 is the case study. Three IL stints without clear resolution, continuing to run him out at 45-79P in between. Eventually his body got right in 2025, but this is the 'push through it' playbook that carries long-term risk. Same signature as Meyer's 2024 MIA season. Worth noting the TB sample is 3 pitchers all at the same age band — the 'aggressive' characterization is best-supported of any small-sample org here but still not a settled philosophy."
+    "strengths":"Workhorse deployment for healthy arms (Harrison, Gill Hill both around 110 IP). Harrison's skipped turn after a short start is the only confirmed one in the original 24-pitcher sample. Round-4 added Urbina (2025 Low-A→High-A) and S Suarez (2024 Low-A) as comparators — see table for full TB sample.",
+    "concerns": "Nichols 2024 is the case study. Three IL stints without clear resolution, continuing to run him out at 45-79P in between. Eventually his body got right in 2025, but this is the 'push through it' playbook that carries long-term risk. Same signature as Meyer's 2024 MIA season."
   },
 
   "CLE": {
-    "pitchers": ["Doughty", "Messick"],
+    "pitchers": ["Doughty", "Messick", "Humphries", "Hernandez"],
     "rhythm":   "Primarily 6-day rotation, very consistent. Occasional 5-6 day compressions. Messick had some 5-day short rest at AA, handled fine.",
-    "cap":      "Dramatic intra-org range: Doughty (19yo, Low-A) capped at 80P all year; Messick (23yo, High-A→AA) pushed to 97P regularly. 17P difference between a prep arm and a college arm 4 years further developed.",
+    "cap":      "Dramatic intra-org range in the originally-analyzed arms: Doughty (19yo, Low-A) capped at 80P all year; Messick (23yo, High-A→AA) pushed to 97P regularly. 17P difference between a prep arm and a college arm 4 years further developed.",
     "buildup":  "Doughty = flattest build in dataset (+1.2P/start). Messick = steady workhorse (+2.3P/start), opened at 76P.",
     "short":    "Doughty's short-start bounce-backs on normal rest. Messick's 8/1/24 outing (1 IP/23P) was followed by normal 5-day rest and an 80P outing (102% of pre-short).",
     "injury":   "Neither pitcher had reported injury disruptions in these seasons.",
     "exemplar": "Parker Messick's 2024 is the 'covers innings cleanly' exemplar. 28 GS, 138.3 IP, max 97P, 80% ACWR sweet spot (slightly dragged down by his two short outings in late July/early August but otherwise textbook). Promoted Lake County → Akron on 6/22/24. Eastern League All-Star. 2025 at AAA. MLB debut April 2026 with a near-no-hitter in his 11th start. Path: 2022 draft → 2023 Low-A → 2024 full HA/AA → 2025 AAA → 2026 MLB. Three full 121+ IP seasons before debut.",
-    "strengths":"Two pitchers at opposite ends of the developmental spectrum, both well-managed. Messick is the workhorse model; Doughty is the tight-leash prep model. Cleveland knows how to run both protocols.",
+    "strengths":"Two pitchers at opposite ends of the developmental spectrum, both well-managed. Messick is the workhorse model; Doughty is the tight-leash prep model. Round-4 added Humphries (2024 High-A) and Hernandez (2025 High-A) as comparators.",
     "concerns": "Doughty only cleared 70P in 5 of 22 outings, didn't break 72P until start #10. The 'tight leash' protects short-term but potentially under-builds volume capacity."
   },
 
@@ -100,31 +100,55 @@
     "cap":      "Both of NYY's 2024 college draftees hit 94-99P in their 2025 first pro season (n=2, directional). Cunningham pushed to 92P+ in 5 of 7 pre-injury starts. Hess peaked at 99P at High-A, 95P at AA.",
     "buildup":  "Cunningham opened at 76P already built (college arm) and climbed fast to 92-94P by start #3. Hess similar aggressive build — hit 97-99P by starts 6-8.",
     "short":    "Cunningham's post-injury ramp-up (30-49P range Aug-Sept) is rehab-mode, not true short-start protocol. Hess had one short start (5/29 at 4.1 IP/99P was pushed deep, then 27-day gap, return at 1.2 IP/42P).",
-    "injury":   "Both had injury-related disruptions. Cunningham: 65+ day shoulder IL (6/9 → 8/13), plus an earlier April IL stint, plus an 2026 Opening Day IL. Worst injury story in the 2025 cohort. Hess: 27-day gap in June without formal IL placement, injury-prone history (flexor strain 2023, HS stress fracture).",
-    "pattern":  "Two first-year NYY pro pitchers, both college-drafted 2024, both pushed HARD early (93%+ starts at 85+P), both had mid-season disruptions. With n=2 this is a cohort worth tracking in 2026, not a proven org-wide approach. Cunningham was excellent before shoulder gave out; Hess navigated his disruption to finish strong at AA.",
-    "strengths":"When healthy, both showed quick development curves and ability to work deep into games early. Hess's AA finish (2.70 ERA over 7 starts) shows the plan can work.",
-    "concerns": "A 94-99P ceiling in a first pro season is aggressive, and both sampled pitchers had mid-season disruptions — but with n=2 we can't cleanly attribute the shoulder IL or the 27-day gap to pitch-count aggression specifically. Hess carried injury history from before the draft (flexor strain 2023, HS stress fracture). Treat this as a flag to watch the 2025 draft class going forward, not proof of causation."
+    "injury":   "Both had injury-related disruptions. Cunningham: 65+ day shoulder IL (6/9 → 8/13), plus an earlier April IL stint, plus a 2026 Opening Day IL. Worst injury story in the 2025 cohort. Hess: 27-day gap in June without formal IL placement, injury-prone history (flexor strain 2023, HS stress fracture).",
+    "pattern":  "Two NYY 2024 draftees, both college, both pushed to 94-99P in their first pro year, both with mid-season injury disruptions. With n=2 the picture is small-sample noisy in both directions: the in-band ACWR rate for the two healthy windows reads tight, but both arms also lost meaningful chunks of season to injury. The full 2025 60+ IP MiLB population has 9 NYY arms in it — see the league-position chips at the top of this page for where NYY actually sits across that wider sample (not where the 2-pitcher in-band rate alone would put it).",
+    "strengths":"When healthy and short-window, both showed quick development curves and ability to work deep into games early. Hess's AA finish (2.70 ERA over 7 starts) shows the plan can work when health holds.",
+    "concerns": "94-99P ceiling in a first pro season is aggressive, and both sampled pitchers had mid-season disruptions. With n=2 plus injury history we can't cleanly attribute the shoulder IL or the 27-day gap to pitch-count aggression specifically — Hess carried injury history from before the draft (flexor strain 2023, HS stress fracture). Read the small-sample in-band rate alongside the league-position chips above; the 2-pitcher healthy-window numbers can read tighter than the org's broader pattern."
   },
 
   "LAD": {
-    "pitchers": ["Patick", "Zazueta"],
-    "rhythm":   "6-day rhythm most consistent. Both pitchers show occasional 5-day compressions and 7-8 day extensions.",
-    "cap":      "Tightest caps in the sampled dataset (n=2, directional). Patick peaked at 75P across 25 starts; Zazueta peaked at 76P across 19 starts. Both pitchers are 19-20yo in Low-A or Rookie/Low-A, so the 75-80P ceiling could be age-and-level appropriate rather than an org-wide choice — we can't separate those with two pitchers both in the young/low-level band.",
+    "pitchers": ["Patick", "Zazueta", "Ferris"],
+    "rhythm":   "6-day rhythm most consistent. Both originally-analyzed pitchers show occasional 5-day compressions and 7-8 day extensions.",
+    "cap":      "Tightest caps in the originally-analyzed sample (n=2, directional). Patick peaked at 75P across 25 starts; Zazueta peaked at 76P across 19 starts. Both pitchers are 19-20yo in Low-A or Rookie/Low-A, so the 75-80P ceiling could be age-and-level appropriate rather than an org-wide choice — we can't separate those with two pitchers both in the young/low-level band. Ferris (Round-4 comparator) reaches further up the chain (High-A → AA) and his table row gives a counterpoint.",
     "buildup":  "Both steady builds (+2.0-2.3 P/start). Patick's early-season pitch count was chaotic (51→26 across 4 starts), then stabilized. Zazueta smooth ramp from complex league into Rancho.",
     "short":    "Patick is the outlier example — his 4/26 outing of 0.1 IP / 26P was followed by a normal 51P next time (pre-short pattern). LAD does not appear to temper pitch counts after a short outing in this 2-pitcher sample.",
     "injury":   "Zazueta was named 2025 Dodgers MiLPOY after a Rancho season capped at ~70 IP total — his workload was held to a tight cap throughout. A 14-day gap in 2024 mid-season is consistent with planned tempering, though the CSV alone can't confirm org intent. Patick: no reported injury but late-season average P declined, consistent with a planned wind-down.",
-    "strengths":"Workload discipline is strict within this 2-pitcher sample. Zazueta was named 2025 Dodgers MiLPOY after Rancho season with ~70 IP total — they're willing to hold back even productive arms. Clean ACWR profiles for both (81-86% sweet).",
-    "concerns": "The 75P ceiling could be under-building volume capacity if LAD holds this line at High-A and above — but we don't have a LAD arm at higher level in the sample to check. Patick getting pulled at 26P on 4/26 is a tell that LAD is comfortable with early hooks, at least for Low-A arms."
+    "strengths":"Workload discipline is strict within the originally-analyzed sample. Zazueta was named 2025 Dodgers MiLPOY after Rancho season with ~70 IP total — they're willing to hold back even productive arms. Clean ACWR profiles for both (81-86% sweet).",
+    "concerns": "The 75P ceiling could be under-building volume capacity if LAD holds this line at High-A and above. Ferris was added as a Round-4 comparator at High-A → AA — see his row for a higher-level data point."
   },
 
   "MIA": {
-    "pitchers": ["White", "Meyer"],
-    "rhythm":   "7-day rotation, disciplined. Both pitchers averaged ~7 day rest across the season.",
+    "pitchers": ["White", "Meyer", "L Martinez"],
+    "rhythm":   "7-day rotation, disciplined. Both originally-analyzed pitchers averaged ~7 day rest across the season.",
     "cap":      "High-ceiling caps for young arms — White hit 86P, Meyer 85P in the same org during 2024. Both at Jupiter Low-A, then Beloit High-A.",
     "buildup":  "White was a steady climber (+2.1P/start) who opened at 71P and never dropped below 68P all year. Meyer was flat (+1.2P/start) but erratic due to injury.",
     "short":    "White had ZERO qualifying short starts across 21 outings — the most consistent pitcher in the dataset. Meyer had MULTIPLE short starts driven by injury.",
     "injury":   "MIA had the most dramatic intra-org split. White: zero injuries, zero short starts, 100% ACWR sweet spot — textbook clean season. Meyer: nagging undisclosed injury through most of High-A tenure, two 18-21 day gaps without formal IL placement.",
-    "strengths":"When things go well, Miami's plan is the cleanest in the dataset — White's 2024 is a gold standard. Consistent rest, scaled caps, smooth progression.",
+    "strengths":"When things go well, Miami's plan is the cleanest in the originally-analyzed dataset — White's 2024 is a gold standard. Consistent rest, scaled caps, smooth progression. L Martinez (Round-4 comparator, 2025 High-A international arm) adds a third data point — see table.",
     "concerns": "Meyer case is a warning. His 2024 shows a pattern of trying to rest through an injury without formal IL placement — two long gaps but no transaction entry. The org kept running him out. Same signature as Nichols's 2024 TB season."
+  },
+
+  "DET": {
+    "pitchers": ["Jobe", "Sears", "Hamm", "Elissalt"],
+    "rhythm":   "Mixed across the four-arm sample (2022, 2024×2, 2025). Lakeland and West Michigan rotations show 5-7 day rest with intermittent compressions; no single rigid pattern across the four pitchers.",
+    "cap":      "Variable. Jobe's 2022 (top draft prospect, 19yo, High-A→Low-A reassignment) peaked in the mid-80s. Sears 2024 (High-A) and Hamm 2024 (Low-A) sit in the 80-90P working range. Elissalt 2025 (High-A→Low-A) reads tighter — see per-pitcher detail.",
+    "buildup":  "Per-arm — see individual pitcher pages. The four-arm sample spans three years and three levels, which limits within-org pattern claims; the league-position chips above contextualize where DET's 2025 60+ IP MiLB cohort sits among the 30 orgs.",
+    "short":    "Per-arm — see individual pitcher pages. No standout short-start pattern visible across the four arms.",
+    "injury":   "Jobe's 2022 was his first full pro season; subsequent injury history (multiple IL stints in 2023-2024) is documented elsewhere but the 2022 CSV reads as a clean season at the time.",
+    "pattern":  "DET is the org-of-interest for this project (the project author works for the Detroit Tigers, included transparently as a comparator). The four-arm sample crosses 2022-2025 and is intentionally mixed-year to give time-series depth rather than a single-season org snapshot. Read the per-pitcher pages alongside the league-position chips at the top of this section.",
+    "strengths":"Sample now spans both ends of the prospect spectrum (Jobe was a #3 overall draft pick; Sears/Hamm/Elissalt are mid-round and international comparators). Multi-year coverage allows for org-process-evolution observation.",
+    "concerns": "Mixed-year sample (2022-2025) limits clean year-over-year pattern attribution. Background distribution is also mixed (1 prep, 1 college, 1 international, 1 unknown). Read per-arm; treat the org-level rollup with the same small-sample skepticism applied elsewhere."
+  },
+
+  "BOS": {
+    "pitchers": ["Paez"],
+    "rhythm":   "Per-arm — see Paez's individual page.",
+    "cap":      "Per-arm. Paez 2023 at Salem (Low-A), full season at one level.",
+    "buildup":  "Per-arm.",
+    "short":    "Per-arm.",
+    "injury":   "No major injury disruption in Paez's 2023 record.",
+    "pattern":  "First BOS entry in the dataset (Round-4 comparator). Single-pitcher sample — directional only. League-position chips above contextualize where BOS sits across the 2025 60+ IP MiLB cohort regardless of how thin our own sample is.",
+    "strengths":"Adds a previously-unrepresented org to the sample.",
+    "concerns": "Single pitcher; no within-org pattern can be drawn from n=1."
   }
 }

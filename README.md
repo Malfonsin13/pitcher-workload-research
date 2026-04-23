@@ -6,7 +6,9 @@ A descriptive study of how MLB organizations manage young, valued starting pitch
 
 **Limitations.** Not a measure of total throwing workload (bullpens, side work, catch play, pregame, and live BP are not in the CSVs). Not an injury prediction tool — we list known injury context for transparency, never as a target. Per-org sample sizes are small (1–3 pitchers in most cases); aggregates are reported with 90% bootstrap CIs.
 
-Currently covers **24 pitchers across 11 organizations**, spanning 2024–2025 seasons, ages 18–23, from first full pro debuts through AAA.
+Currently covers **38 pitchers across 13 organizations**, spanning 2022–2025 seasons (Jobe's 2022 included for DET time-series depth), ages 18–23, from first full pro debuts through AAA.
+
+**League-baseline reference.** Each org page also shows that org's position within the full 30-org 2025 MiLB 60+ IP population — a 4-chip ribbon at the top of every org page (mean P/start, mean IP, mean GS, mean Vel4S) reading e.g. *"NYY — 11/30 in mean P/start, 7/30 in mean IP, …"* The reference data covers 884 pitcher-seasons across the 2023, 2024, and 2025 "MiLB pitchers age 18-22 with 60+ IP" files, all 30 orgs. League data is aggregated season totals only — no per-game detail in those files — so league-context comparisons are season-level. The chips are the corrective for small-n featured-pitcher reads: NYY at 81.7% sweet on n=2 looks middle-tier, but the org-wide rank of 11/30 in mean P/start says NYY is genuinely middle-of-pack, not "tightly managed."
 
 Author: Marcelo Alfonsin
 
@@ -19,31 +21,33 @@ The entire deliverable is `docs/index.html` — standalone, no server required, 
 
 ---
 
-## Headline observations (n=24)
+## Headline observations (n=38)
 
 **Highest-IP seasons that finished healthy (95+ IP, ≥80% in-band ACWR, max ≤1.4, no in-season injury flag):**
-Hackenberg (ATL, 129 IP, 91% in-band, 1.17 max ACWR, 3 levels), Ford (SEA, 125 IP, 100%), Santucci (NYM, 122 IP, 96%), McLean (NYM, 110 IP), Baumann (ATL, 99 IP), White (MIA, 96 IP). All six showed consistent 6–7 day rhythm, pitch-count caps expanding in step with promotions, ACWR max under 1.4, and no unexplained mid-season gaps. Read as case studies of what unbothered usage looked like in this cohort, not as best practices.
+Hackenberg (ATL, 129 IP, 91% in-band, 1.17 max ACWR, 3 levels), Ford (SEA, 125 IP, 100%), Santucci (NYM, 122 IP, 96%), McLean (NYM, 110 IP), Baumann (ATL, 99 IP), White (MIA, 96 IP). All six showed consistent 6–7 day rhythm, pitch-count caps expanding in step with promotions, ACWR max under 1.4, and no unexplained mid-season gaps. Read as case studies of what unbothered usage looked like in this cohort, not as best practices. The Round-4 expansion (14 new arms) did not add to this cleanest tier.
 
-**Age-group observation — in-band ACWR % is U-shaped across this cohort, not linear:**
-- 18–19 (n=9): avg 81 IP, 82 max P, **85% in-band**, 1.33 max ACWR — tight ranges, most uniform usage
-- 20–21 (n=7): avg 103 IP, 88 max P, **76% in-band**, 1.54 max ACWR — most variable middle band
-- 22+ (n=8): avg 111 IP, 94 max P, **83% in-band**, 1.40 max ACWR — workhorse cohort, ratios stabilize
+**Age-group observation — the U-shape softened with the larger sample:**
+- 18–19 (n=15): avg 85 IP, 83 max P, **80% in-band**, 1.38 max ACWR — still the tight-cap zone, but in-band % dropped 5 points from the n=9 read
+- 20–21 (n=15): avg 102 IP, 89 max P, **78% in-band**, 1.44 max ACWR — middle band, but no longer obviously the "noisiest"
+- 22+ (n=8): avg 111 IP, 94 max P, **83% in-band**, 1.40 max ACWR — workhorse cohort, ratios stabilize (group composition unchanged in Round 4)
 
-**Organization-level snapshot** (unweighted mean of per-pitcher in-band ACWR %; n=1–3 per org, directional only — demoted into a collapsed `<details>` block on the live site):
-- **Cleanest:** NYM 93.3% (n=2) · ATL 93.0% (n=3) · CLE/WAS 87.5% (n=1)
-- **Middle:** MIA 84.4 (n=2) · LAD 83.8 (n=2) · CLE 82.1 (n=2) · NYY 81.7 (n=2) · SEA 78.9 (n=3)
-- **Most aggressive:** MIL 75.7 (n=3) · NYY/CHW 73.7 (n=1) · TB 68.9 (n=3)
+The Round-3 U-shape (85% / 76% / 83%) reads more like a small-sample artifact under n=38; the new pattern is closer to monotonic-with-noise (80% / 78% / 83%).
 
-With most orgs at n=1–2, these rankings are starting points for investigation, not team-wide trends. Only ATL, MIL, SEA, and TB clear n=3.
+**Organization-level snapshot** (unweighted mean of per-pitcher in-band ACWR %; n=1–6 per org, directional only — demoted into a collapsed `<details>` block on the live site, and now paired with each org's rank in the 30-org 2025 60+ IP population on the org page):
+- **Cleanest sampled:** NYM 93.3% (n=2) · ATL 93.0% (n=3) · MIA 87.8% (n=3) · CLE/WAS 87.5% (n=1) · BOS 86.7% (n=1)
+- **Middle:** CLE 82.8% (n=4) · LAD 82.3% (n=3) · NYY 81.7% (n=2) · MIL 80.3% (n=6) · SEA 78.9% (n=3)
+- **Most aggressive sampled:** NYY/CHW 73.7% (n=1) · TB 71.0% (n=5) · DET 63.8% (n=4)
+
+With most orgs still under n=5, these are directional. The league chips on each org page give the corrective: NYY at 11/30 in mean P/start is org-wide middle-of-pack, not the "tightly managed" read a 2-pitcher featured sample suggested. DET at 24/30 in mean P/start is consistent with the sampled DET pattern of moderate caps. BOS at 2/30 in mean P/start runs much higher pitch-volumes org-wide than Paez's individual season shows.
 
 **Visible workload is necessary context, not sufficient evidence of injury risk:**
 Extended rest gaps (>15 days) coincide with reported injuries, but that is largely because the gap IS the IL stint — it is confirmatory, not predictive. 5 of 6 pitchers with 15+ day gaps had injury issues (Meccage, Meyer, Cunningham, Hess, Nichols); White's 20-day gap was the 2024 Futures Game plus a planned skip. Of 5 pitchers with ACWR spikes above 1.5, only Nichols had an injury pattern overlapping the spike. Cijntje's three spikes landed during his low-pitch-count piggyback phase (3-start chronic baseline at 30–50P makes ACWR mathematically volatile) — they read as metric artifacts, not workload overload. Knoth's January 2025 TJ had no visible warning in his 2024 volume data; the CSV does not see bullpens, mechanics, or perceived effort.
 
 **Short-start handling — split into two buckets:**
-A "true short-workload" start = <4.0 IP AND ≥2 IP shorter than the previous start AND pitch count ≤ 80% of the previous start's pitch count. The pitch-count guard is new in this iteration: it filters out outings where IP collapsed but the workload was held — those are now reported as **inefficient low-IP outings** in their own table. After the split: 38 true-short events across 18 pitchers; 17 inefficient-low-IP events across 12 pitchers. Median next-start as % of pre-short across the true-short bucket is reported on the **Short starts** tab.
+A "true short-workload" start = <4.0 IP AND ≥2 IP shorter than the previous start AND pitch count ≤ 80% of the previous start's pitch count. The pitch-count guard filters out outings where IP collapsed but the workload was held — those are reported as **inefficient low-IP outings** in their own table. After the split: 56 true-short events across 30 pitchers; 27 inefficient-low-IP events across 19 pitchers. Median next-start as % of pre-short across the true-short bucket is reported on the **Short starts** tab.
 
 **Promotions — pre/post 3-start snapshots:**
-Each level transition (Low-A → High-A, etc.) is detected from the `teamWithLevel` field. The **Promotions** tab reports pre-3 vs post-3 means for pitch count, ACWR, rest, and velocity, plus the number of post-promo starts before pitch count returned to the pre-promo mean. 21 transitions across 17 pitchers in this cohort.
+Each level transition (Low-A → High-A, etc.) is detected from the `teamWithLevel` field. The **Promotions** tab reports pre-3 vs post-3 means for pitch count, ACWR, rest, and velocity, plus the number of post-promo starts before pitch count returned to the pre-promo mean. 25 transitions across 21 pitchers in this cohort.
 
 **Scheduling response to performance regression — exploratory:**
 Flags starts where fastball velocity dropped ≥1.0 mph below the rolling 3-start baseline OR Strike% dropped ≥5 pp, then checks whether the next rest window expanded beyond the pitcher's baseline rest. First-pass only (thin rolling baseline, uncontrolled for weather/opponent) — a lens for investigation, not a verdict. Lives in the **Short starts** tab alongside tempered-start detection.
@@ -51,8 +55,8 @@ Flags starts where fastball velocity dropped ≥1.0 mph below the rolling 3-star
 **Sensitivity to thresholds:**
 Headline metrics (in-band %, spike count, true-short count, tempered count, high-stress P/IP rate) are recomputed under three threshold variants per knob. Variants moving > ±25% from the default are flagged **threshold-sensitive** on the Methodology tab — read those headlines with extra hedging.
 
-**Hard cap patterns cluster clearly by age and org — within small samples:**
-LAD sits tightest at a ~75P ceiling (Patick, Zazueta), though both are 19-20yo so age-appropriate scaling is confounded with org philosophy (n=2, directional). SEA's caps climb across its 3-pitcher sample (Sloan 72 at 19 Low-A → Ford 89 at 20 Low-A → Cijntje 99 at 21 AA) — age and level are confounded, we can't separate them at n=3. CLE is age-calibrated in the 2-pitcher sample (Doughty 80 at 19, Messick 97 at 23). NYY's two 2024 college draftees (Cunningham, Hess) both ran 94–99P in their first pro season and both had in-season disruptions — a cohort to track in 2026, not yet a proven causal link at n=2. TB was aggressive (87–92P) across its 3 sampled 20-21yo arms. ATL's Caminiti at 93P in 18-19 is one pitcher at that age in that org — directional.
+**Hard cap patterns cluster — within small samples, and the league baseline often tells a different story:**
+LAD's tight 75P sample look (Patick, Zazueta) survives the addition of Ferris (92P max), so the org now reads as 75–92P range across n=3 rather than a uniform 75 ceiling. SEA's caps still climb across its 3-pitcher sample (Sloan 72 → Ford 89 → Cijntje 99). CLE expanded to n=4 with Humphries (75) and Hernandez (87) joining Doughty (80) and Messick (97) — age-calibrated holds. MIL's 6-pitcher sample spans 80–94P. NYY's two 2024 college draftees (Cunningham, Hess) both ran 94–99P with in-season disruptions; the league baseline says NYY ranks 11/30 in mean P/start across the 30-org 2025 60+ IP population, so the featured-sample look is not org-representative. DET's n=4 sample (83–92P) lines up with DET ranking 24/30 in mean P/start across the broader population — DET genuinely runs lower per-start volume than most. TB at n=5 runs 87–93P across 4 of 5 arms. Read all of these as starting hypotheses scoped by the league-position chips on each org page, not settled philosophies.
 
 ---
 
@@ -159,7 +163,7 @@ The quantitative sections (scorecard, hard cap rankings, age group averages, inj
 cd /path/to/this/folder
 git init
 git add .
-git commit -m "Initial commit: 24 pitchers, 11 orgs"
+git commit -m "Initial commit: 38 pitchers, 13 orgs"
 
 # Create an empty repo on GitHub (don't initialize with README)
 # Then:
@@ -243,26 +247,36 @@ Sweet spot: 0.8–1.3 (bounds inclusive on both ends). Spike: >1.5. Valid for st
 | 22 | Thomas White | MIA | 2024 | 19 | Low-A → High-A | 2023, CB-A (#35) |
 | 23 | Noble Meyer | MIA | 2024 | 19 | Low-A → High-A | 2023, 1st (#10) |
 | 24 | Gage Ziehl | NYY/CHW | 2025 | 22 | Low-A → High-A | 2024, 4th (#119) |
+| 25 | Andrew Sears | DET | 2024 | 22 | High-A | unknown |
+| 26 | Daniel Corniel | MIL | 2024 | 20 | High-A | INT'L |
+| 27 | Jackson Ferris | LAD | 2024 | 20 | High-A → AA | 2022, 2nd (#47) |
+| 28 | Jaden Hamm | DET | 2024 | 21 | High-A → AA | 2024, 5th (#142) |
+| 29 | Jack Humphries | CLE | 2024 | 19 | Low-A | unknown |
+| 30 | Jackson Jobe | DET | 2022 | 20 | High-A → Low-A | 2021, 1st (#3) |
+| 31 | Jedixson Paez | BOS | 2023 | 20 | Low-A | INT'L |
+| 32 | Joel Urbina | TB | 2025 | 20 | High-A | INT'L |
+| 33 | Lael Elissalt | DET | 2025 | 21 | Low-A | INT'L |
+| 34 | Luis Martinez | MIA | 2025 | 21 | Low-A | INT'L |
+| 35 | Manuel Hernández | CLE | 2025 | 18 | Low-A | INT'L |
+| 36 | Manuel Rodriguez | MIL | 2024 | 19 | Rookie → Low-A | INT'L |
+| 37 | Santiago Suarez | TB | 2024 | 19 | Low-A → High-A | INT'L |
+| 38 | Wuilfredo Torres | MIL | 2025 | 19 | Low-A | INT'L |
 
 ---
 
 ## Suggested next additions
 
-Organizations under-represented or missing that would strengthen the dataset:
+Organizations under-represented or with patterns worth more data:
 
-**DET (own org — highest priority):**
-- Jaden Hamm (2024, 5th rd, RHP Middle Tennessee)
-- Owen Hall (2023, 2nd rd)
-
-**HOU (not yet in dataset — tests HOU pitching dev reputation):**
+**HOU (not yet in dataset — tests HOU pitching dev reputation, ranks 1/30 in mean P/start across the 30-org 60+ IP population):**
 - Alonzo Tredwell (2023, 2nd rd)
 - Ethan Pecko (2024, 2nd rd)
 
-**BOS (not yet in dataset):**
+**BOS (currently n=1):**
 - Juan Valera
-- Jedixson Paez
+- Other young BOS arms — the league baseline shows BOS at 2/30 in mean P/start, so featured-sample data here would be especially informative
 
-**More CLE (test the tight-leash vs workhorse thesis further):**
+**More CLE (n=4, test the age-calibrated thesis further):**
 - Other young arms in the system
 
 **Expand ATL, NYY, TB** — each has an interesting pattern worth more data points.
