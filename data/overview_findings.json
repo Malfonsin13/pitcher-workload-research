@@ -138,6 +138,38 @@
     ]
   },
 
+  "population_resonances": {
+    "title": "Resonances with the broader 30-org picture",
+    "intro": "The per-pitcher game-log analysis and a separate 30-org population study (all MiLB pitchers age 18-22 with 60+ IP, 2023-2025, analyzed independently via ChatGPT) were not designed together. The five findings below are places where the two independent lenses point in the same direction — or pull apart in ways worth naming. Neither dataset sees what the other sees: the per-pitcher analysis tracks within-season start-by-start rhythm; the population study tracks season-over-season IP growth and return rates across all 30 orgs. Where they agree, the signal is stronger. Where they diverge, both readings are real.",
+    "items": [
+      {
+        "tone": "info",
+        "headline": "Age 19→20 is the pivotal workload threshold — confirmed by both lenses.",
+        "body": "Our per-pitcher data shows pitch-count ceilings scale with age: 18-19yo avg 83P max, 20-21yo avg 89P, 22+ avg 94P. The 30-org population dataset shows the same inflection in season-to-season IP volume: the biggest year-over-year IP jump for same-org repeaters occurs at age 19→20 (+19.9 IP avg, 83% of pitchers increasing), then tapers to +11.9 IP at 20→21, and flatlines to -1.5 IP at 21→22. Two independent datasets, different granularity, same answer: age 20 is where orgs open the tap — both per start and per season."
+      },
+      {
+        "tone": "warn",
+        "headline": "TB reads as the most aggressive org from both directions.",
+        "body": "Our per-pitcher ACWR analysis ranks TB as the lowest ACWR sweet% in the sampled orgs (71%) — multiple spikes (Nichols 3 IL stints, Gill Hill, Harrison). The 30-org population dataset independently identifies TB as the most aggressive same-org year-over-year IP escalator among orgs with 5+ repeat pairs (+18.5 IP avg). Two independent methods working on independent samples point at the same organization. That convergence strengthens the read on TB's deployment philosophy beyond what either dataset could say alone."
+      },
+      {
+        "tone": "good",
+        "headline": "MIA's high population return rate validates the 'sustainable management' read.",
+        "body": "Our per-pitcher analysis designates MIA's White (100% ACWR sweet, zero short starts, zero injury disruption) as the gold-standard season in this dataset and places MIA in the top tier of sampled orgs. The 30-org population study shows MIA leads all 30 organizations in strict same-org return rate: 58.3% of their 60+ IP pitchers came back to the same org the following year and threw more innings. That's 7 of 12 qualifying pitcher-seasons — best in the population. The per-start discipline we see within seasons appears to translate into arms that can actually carry more volume the next year."
+      },
+      {
+        "tone": "danger",
+        "headline": "NYY's 0% same-org return rate adds population context to the first-year aggressive deployment concern.",
+        "body": "Our 2-pitcher NYY sample (Cunningham: 94-99P first pro year → shoulder IL; Hess: 94-99P → 27-day gap) is too small to draw org-level conclusions. The 30-org population dataset adds a broader frame: NYY had 0 of 9 qualifying pitchers return to the same org with more IP the following year — the lowest strict return rate of any org with a meaningful cohort. Trades, MLB promotions, and injuries all collapse into that 0/9 figure; we cannot separate them from this data. But paired with the visible workload signals from our per-pitcher analysis, the combination warrants monitoring rather than dismissal. Not a finding — a flag."
+      },
+      {
+        "tone": "info",
+        "headline": "DET tension: 'most aggressive' ACWR tier but 2nd-best population return rate.",
+        "body": "Our per-pitcher ACWR analysis places DET in the 'most aggressive' sampled tier (63.8% sweet) and the 30-org dataset ranks DET 24/30 in per-start pitch count. Both suggest DET runs below-average workload rhythm. But the population dataset also shows DET with the 2nd-highest same-org return rate (56%, 5 of 9 pitchers came back with more IP) and 4th-lowest pitches-per-inning (15.91 — meaning DET pitchers are efficient when deployed). These aren't contradictory: the ACWR metric captures within-season rhythmic inconsistency, while the return rate captures multi-season outcomes. DET's low per-start pitch counts may allow sustainable volume accumulation across seasons even when individual-start ACWR runs noisier. Both readings are real; reading one without the other misses the picture."
+      }
+    ]
+  },
+
   "key_patterns": [
     {
       "title": "Short-start re-entry sits near pre-short workload, not below it",

@@ -1,0 +1,106 @@
+{
+  "_comment": "Cross-dataset metrics derived from the 30-org MiLB 60+ IP population (2023/24/25), analyzed via ChatGPT (pitcher_org_age_dashboardv3). Strict return rule: a pitcher counts as a 'return' only if they appear in the same org the following year AND throw more IP than the prior year. yoy_ip_avg is the avg IP change for same-org repeat pairs. p_per_ip and p_per_ip_rank are efficiency metrics across the full 884 pitcher-season population. Age-progression data is cohort-wide (all 30 orgs).",
+
+  "age_progression": {
+    "_comment": "Same-org repeaters only. n_pairs = number of consecutive-year same-org pairs in that age cohort.",
+    "transitions": [
+      { "from_age": 18, "to_age": 19, "n_pairs": 4,  "avg_ip_start": 77.8, "avg_ip_next": 100.2, "avg_diff": 22.4, "pct_increase": 0.75 },
+      { "from_age": 19, "to_age": 20, "n_pairs": 30, "avg_ip_start": 77.8, "avg_ip_next": 97.6,  "avg_diff": 19.9, "pct_increase": 0.83 },
+      { "from_age": 20, "to_age": 21, "n_pairs": 71, "avg_ip_start": 89.0, "avg_ip_next": 100.8, "avg_diff": 11.9, "pct_increase": 0.72 },
+      { "from_age": 21, "to_age": 22, "n_pairs": 78, "avg_ip_start": 98.4, "avg_ip_next": 96.9,  "avg_diff": -1.5, "pct_increase": 0.44 }
+    ]
+  },
+
+  "by_org": {
+    "ATL": {
+      "return_rate":        0.273,
+      "return_n":           3,
+      "return_cohort_n":    11,
+      "avg_ip_gain_same":   14.3,
+      "yoy_ip_avg":         5.5,
+      "yoy_n_pairs":        5,
+      "p_per_ip":           16.39,
+      "p_per_ip_rank_of_30": 12
+    },
+    "BOS": {
+      "return_rate":        0.182,
+      "return_n":           2,
+      "return_cohort_n":    11,
+      "avg_ip_gain_same":   11.3,
+      "yoy_ip_avg":         -3.0,
+      "yoy_n_pairs":        4,
+      "p_per_ip":           16.37,
+      "p_per_ip_rank_of_30": 11
+    },
+    "DET": {
+      "return_rate":        0.556,
+      "return_n":           5,
+      "return_cohort_n":    9,
+      "avg_ip_gain_same":   20.5,
+      "yoy_ip_avg":         15.2,
+      "yoy_n_pairs":        6,
+      "p_per_ip":           15.91,
+      "p_per_ip_rank_of_30": 4
+    },
+    "HOU": {
+      "return_rate":        0.214,
+      "return_n":           3,
+      "return_cohort_n":    14,
+      "avg_ip_gain_same":   31.1,
+      "yoy_ip_avg":         7.0,
+      "yoy_n_pairs":        6,
+      "p_per_ip":           17.21,
+      "p_per_ip_rank_of_30": 28
+    },
+    "MIA": {
+      "return_rate":        0.583,
+      "return_n":           7,
+      "return_cohort_n":    12,
+      "avg_ip_gain_same":   20.8,
+      "yoy_ip_avg":         12.3,
+      "yoy_n_pairs":        10,
+      "p_per_ip":           16.81,
+      "p_per_ip_rank_of_30": 25
+    },
+    "NYM": {
+      "return_rate":        0.182,
+      "return_n":           2,
+      "return_cohort_n":    11,
+      "avg_ip_gain_same":   16.5,
+      "yoy_ip_avg":         -3.9,
+      "yoy_n_pairs":        5,
+      "p_per_ip":           16.58,
+      "p_per_ip_rank_of_30": 19
+    },
+    "NYY": {
+      "return_rate":        0.0,
+      "return_n":           0,
+      "return_cohort_n":    9,
+      "avg_ip_gain_same":   null,
+      "yoy_ip_avg":         null,
+      "yoy_n_pairs":        null,
+      "p_per_ip":           16.32,
+      "p_per_ip_rank_of_30": 9
+    },
+    "SEA": {
+      "return_rate":        0.333,
+      "return_n":           2,
+      "return_cohort_n":    6,
+      "avg_ip_gain_same":   46.5,
+      "yoy_ip_avg":         null,
+      "yoy_n_pairs":        null,
+      "p_per_ip":           15.82,
+      "p_per_ip_rank_of_30": 1
+    },
+    "TB": {
+      "return_rate":        0.333,
+      "return_n":           4,
+      "return_cohort_n":    12,
+      "avg_ip_gain_same":   27.2,
+      "yoy_ip_avg":         18.5,
+      "yoy_n_pairs":        6,
+      "p_per_ip":           15.88,
+      "p_per_ip_rank_of_30": 3
+    }
+  }
+}

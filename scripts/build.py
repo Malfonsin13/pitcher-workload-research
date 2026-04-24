@@ -49,6 +49,7 @@ injuries = load_json("injury_flags.json")
 weather = load_json("weather_flags.json")
 orgs = load_json("org_findings.json")
 overview = load_json("overview_findings.json")
+league_context_v2 = load_json("league_context_v2.json")
 
 # Strip out _comment keys
 meta = {k: v for k, v in meta.items() if not k.startswith("_")}
@@ -1516,6 +1517,7 @@ js_payload = {
     'ORG_COLOR': ORG_COLOR,
     'LEAGUE_BASELINE': league_baseline,
     'ORG_LEAGUE_POSITION': org_league_position,
+    'CROSS_DATASET': league_context_v2,
     'GENERATED': dt.datetime.now().strftime('%B %Y')
 }
 
@@ -1912,6 +1914,7 @@ function renderOverview() {
     ${injuriesHtml}
     <h2>Patterns observed across the cohort</h2>
     ${patterns}
+    ${renderPopulationResonances()}
     ${OVERVIEW.org_rankings ? `
       <details style="margin-top:32px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:14px 18px;">
         <summary style="cursor:pointer;font-weight:600;color:var(--text);font-size:15px;">Org-level descriptive snapshot — small samples, directional only ▾</summary>
@@ -1919,6 +1922,21 @@ function renderOverview() {
         ${renderOrgRankings(OVERVIEW.org_rankings)}
       </details>
     ` : ''}
+  `;
+}
+
+function renderPopulationResonances() {
+  const pr = OVERVIEW.population_resonances;
+  if (!pr) return '';
+  const items = pr.items.map(item => {
+    return `<div class="callout callout-${item.tone}" style="margin-bottom:10px;font-size:13px;"><strong>${item.headline}</strong><br><span style="font-size:12px;">${item.body}</span></div>`;
+  }).join('');
+  return `
+    <details style="margin-top:32px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:14px 18px;">
+      <summary style="cursor:pointer;font-weight:600;color:var(--text);font-size:15px;">${pr.title} ▾</summary>
+      <p class="lede" style="margin-top:10px;font-size:12px;">${pr.intro}</p>
+      <div style="margin-top:12px;">${items}</div>
+    </details>
   `;
 }
 
@@ -2188,6 +2206,48 @@ function renderLeagueContext(key) {
   return `<div class="league-context"><div class="league-context-header">League position — ${yr} 60+ IP MiLB pop (18–22)${key !== lookup ? ` <span style="color:var(--text-tertiary);font-size:11px;">(showing ${lookup} for composite tag)</span>` : ''}</div><div class="league-chips">${chips}</div>${tableHtml}</div>`;
 }
 
+function renderCrossDataset(key) {
+  // Reads from CROSS_DATASET.by_org[key] and ORGS[key].cross_finding.
+  // Renders a compact chip strip (return rate + YoY IP avg) plus a one-line callout.
+  const lookup = key.includes('/') ? key.split('/')[0] : key;
+  const cd = CROSS_DATASET && CROSS_DATASET.by_org && CROSS_DATASET.by_org[lookup];
+  const f = ORGS[key];
+  if (!cd && !(f && f.cross_finding)) return '';
+
+  const ord = (n) => { const j = n%10, j100 = n%100; if (j===1&&j100!==11) return n+'st'; if (j===2&&j100!==12) return n+'nd'; if (j===3&&j100!==13) return n+'rd'; return n+'th'; };
+  let chipsHtml = '';
+  if (cd) {
+    // Return rate chip
+    const rr = cd.return_rate;
+    const rrPct = Math.round(rr * 100);
+    const rrColor = rr >= 0.40 ? 'var(--good)' : rr >= 0.25 ? 'var(--info)' : rr === 0 ? 'var(--danger)' : 'var(--warn)';
+    const rrChip = `<div class="league-chip"><span class="league-chip-label">Same-org return rate</span><strong style="color:${rrColor};">${rrPct}%</strong><span class="league-chip-val">${cd.return_n} of ${cd.return_cohort_n}</span><span class="league-chip-pop">60+ IP → more IP next yr</span></div>`;
+
+    // YoY IP chip
+    let yoyChip = '';
+    if (cd.yoy_ip_avg !== null && cd.yoy_ip_avg !== undefined) {
+      const yoy = cd.yoy_ip_avg;
+      const yoyColor = yoy > 5 ? 'var(--good)' : yoy > 0 ? 'var(--info)' : 'var(--warn)';
+      const yoySign = yoy >= 0 ? '+' : '';
+      yoyChip = `<div class="league-chip"><span class="league-chip-label">YoY IP avg (same org)</span><strong style="color:${yoyColor};">${yoySign}${yoy.toFixed(1)}</strong><span class="league-chip-val">${cd.yoy_n_pairs} repeat pairs</span><span class="league-chip-pop">season-over-season Δ</span></div>`;
+    }
+
+    // P/IP efficiency chip
+    const pip = cd.p_per_ip;
+    const pipRank = cd.p_per_ip_rank_of_30;
+    const pipColor = pipRank <= 5 ? 'var(--good)' : pipRank <= 15 ? 'var(--info)' : 'var(--warn)';
+    const pipChip = `<div class="league-chip"><span class="league-chip-label">P/IP efficiency</span><strong style="color:${pipColor};">${ord(pipRank)} of 30</strong><span class="league-chip-val">${pip.toFixed(2)} P/IP</span><span class="league-chip-pop">lower = more efficient</span></div>`;
+
+    chipsHtml = `<div class="league-context" style="margin-top:8px;"><div class="league-context-header">Cross-dataset signal — 30-org population study (2023–2025, 60+ IP)</div><div class="league-chips">${rrChip}${yoyChip}${pipChip}</div></div>`;
+  }
+
+  const calloutHtml = (f && f.cross_finding)
+    ? `<div class="callout callout-info" style="font-size:12.5px;margin:8px 0 16px;border-left-color:var(--info);"><strong>Population signal:</strong> ${f.cross_finding}</div>`
+    : '';
+
+  return chipsHtml + calloutHtml;
+}
+
 function renderOrg(key) {
   document.querySelectorAll('#org-subnav button').forEach(b => b.classList.toggle('active', b.dataset.org === key));
   const f = ORGS[key];
@@ -2217,6 +2277,7 @@ function renderOrg(key) {
   document.getElementById('org-detail').innerHTML = `
     <div class="org-header"><h2 style="color:${color};">${key}</h2><div class="org-pitchers">${orgPitchers.length} pitcher${orgPitchers.length > 1 ? 's' : ''}: ${orgPitchers.map(p => `<a href="#pitchers/${p}" style="color:${color};text-decoration:none;border-bottom:1px dotted;">${p}</a>`).join(', ')}</div></div>
     ${renderLeagueContext(key)}
+    ${renderCrossDataset(key)}
     <div class="stats-grid">
       <div class="stat"><div class="stat-label">Pitchers studied</div><div class="stat-value">${orgPitchers.length}</div></div>
       <div class="stat"><div class="stat-label">Avg starts/pitcher</div><div class="stat-value">${meanGS.toFixed(0)}</div></div>
