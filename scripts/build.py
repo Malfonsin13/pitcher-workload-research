@@ -1658,6 +1658,7 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
 .league-chip strong { font-size: 13px; color: var(--text); }
 .league-chip-val { color: var(--text-muted); font-size: 11px; }
 .league-chip-pop { color: var(--text-tertiary); font-size: 10px; font-style: italic; }
+.pop-chart-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); margin: 12px 0 4px; }
 .league-context-detail { margin-top: 8px; }
 .league-context-detail summary { font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 4px 0; }
 .league-context-table { font-size: 11px; }
@@ -1745,6 +1746,12 @@ js_data = "const PAYLOAD = " + json.dumps(js_payload, default=str) + ";"
 # Load the runtime JS (separated for readability)
 app_js = r"""
 const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, TEMPERED_STARTS, SCHEDULING_RESPONSE, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR, INEFFICIENT_STARTS, BACKGROUND_STATS, ORG_AGGREGATES, VOLATILITY, EFFICIENCY, REST_INSTABILITY, VELOCITY_RESPONSE, PROMOTIONS, SENSITIVITY, LEAGUE_BASELINE, ORG_LEAGUE_POSITION, CROSS_DATASET } = PAYLOAD;
+
+const FEATURED_ORGS_SET = new Set(['ATL','BOS','CLE','DET','LAD','MIA','MIL','NYM','NYY','SEA','TB']);
+const _CD = {}; // Chart registry — destroyed before re-draw to avoid "canvas already in use"
+function _destroyChart(id) { if (_CD[id]) { try { _CD[id].destroy(); } catch(e){} delete _CD[id]; } }
+function _orgColor(o) { return ORG_COLOR[o] || '#888'; }
+function _isFeatured(o) { return FEATURED_ORGS_SET.has(o); }
 
 // ============================================================================
 // Helpers
@@ -1923,6 +1930,11 @@ function renderOverview() {
       </details>
     ` : ''}
   `;
+  setTimeout(() => {
+    _drawReturnRates('pop-return-chart');
+    _drawBuildup('pop-buildup-chart');
+    _drawVolEff('pop-voleff-chart');
+  }, 50);
 }
 
 function renderPopulationResonances() {
@@ -1932,10 +1944,22 @@ function renderPopulationResonances() {
     return `<div class="callout callout-${item.tone}" style="margin-bottom:10px;font-size:13px;"><strong>${item.headline}</strong><br><span style="font-size:12px;">${item.body}</span></div>`;
   }).join('');
   return `
-    <details style="margin-top:32px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:14px 18px;">
+    <details open style="margin-top:32px;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:14px 18px;">
       <summary style="cursor:pointer;font-weight:600;color:var(--text);font-size:15px;">${pr.title} ▾</summary>
       <p class="lede" style="margin-top:10px;font-size:12px;">${pr.intro}</p>
       <div style="margin-top:12px;">${items}</div>
+      <h4 class="pop-chart-title">Same-org return rate — % of 60+ IP arms who returned with more IP (2023–2025)</h4>
+      <div style="position:relative;height:380px;"><canvas id="pop-return-chart"></canvas></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+        <div>
+          <h4 class="pop-chart-title">YoY IP buildup — avg season-over-season \u0394 (same-org repeat pairs)</h4>
+          <div style="position:relative;height:310px;"><canvas id="pop-buildup-chart"></canvas></div>
+        </div>
+        <div>
+          <h4 class="pop-chart-title">Volume vs efficiency — mean IP vs pitches per IP</h4>
+          <div style="position:relative;height:310px;"><canvas id="pop-voleff-chart"></canvas></div>
+        </div>
+      </div>
     </details>
   `;
 }
@@ -2121,6 +2145,123 @@ function drawBuildChart(name) {
   });
 }
 
+// ============================================================================
+// Population-level charts (30-org, 2023-2025, 60+ IP dataset)
+// ============================================================================
+
+function _drawReturnRates(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const data = [...(CROSS_DATASET.health_all || [])].sort((a,b) => b.rate - a.rate);
+  const bgColors = data.map(d => (_isFeatured(d.o) ? _orgColor(d.o) : '#888888') + (_isFeatured(d.o) ? 'dd' : '44'));
+  const bdColors = data.map(d => _isFeatured(d.o) ? _orgColor(d.o) : 'transparent');
+  _CD[cid] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: data.map(d => d.o), datasets: [{ data: data.map(d => Math.round(d.rate * 100)), backgroundColor: bgColors, borderColor: bdColors, borderWidth: data.map(d => _isFeatured(d.o) ? 1.5 : 0), borderRadius: 3 }] },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx2 => { const d = data[ctx2.dataIndex]; return `${Math.round(d.rate*100)}% (${d.ret_n}/${d.n})`; } } } },
+      scales: { x: { min:0, max:100, ticks: { callback: v=>v+'%', font:{size:10} }, grid:{color:'rgba(128,128,128,0.12)'} }, y: { ticks:{font:{size:10}}, grid:{display:false} } }
+    }
+  });
+}
+
+function _drawBuildup(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const data = [...(CROSS_DATASET.buildup_all || [])].sort((a,b) => b.diff - a.diff);
+  _CD[cid] = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: data.map(d=>d.o), datasets: [{ data: data.map(d=>d.diff), backgroundColor: data.map(d=>d.diff>=0?'#0f766ecc':'#c2410ccc'), borderColor: data.map(d=>_isFeatured(d.o)?_orgColor(d.o):'transparent'), borderWidth: data.map(d=>_isFeatured(d.o)?2:0), borderRadius:3 }] },
+    options: {
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label: ctx2=>{ const d=data[ctx2.dataIndex]; return `${d.diff>=0?'+':''}${d.diff.toFixed(1)} IP avg (n=${d.n}, ${d.pct}% increased)`; }}} },
+      scales:{ x:{ticks:{callback:v=>(v>0?'+':'')+v+' IP', font:{size:10}}, grid:{color:'rgba(128,128,128,0.12)'}}, y:{ticks:{font:{size:10}},grid:{display:false}} }
+    }
+  });
+}
+
+function _drawVolEff(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const raw = CROSS_DATASET.org_summary_all || [];
+  _CD[cid] = new Chart(ctx, {
+    type:'scatter',
+    data:{ datasets:[{ data: raw.map(d=>({x:d.ip,y:d.pip,label:d.o})), backgroundColor: raw.map(d=>(_isFeatured(d.o)?_orgColor(d.o):'#888888')+(_isFeatured(d.o)?'cc':'44')), pointRadius: raw.map(d=>_isFeatured(d.o)?6:4), pointHoverRadius:8 }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label: c=>{ const p=c.raw; return `${p.label}: ${p.x.toFixed(1)} IP · ${p.y.toFixed(2)} P/IP`; }}} },
+      scales:{ x:{title:{display:true,text:'Mean IP',font:{size:10}},ticks:{font:{size:10}}}, y:{title:{display:true,text:'P/IP',font:{size:10}},ticks:{font:{size:10}}} }
+    },
+    plugins:[{ id:'volEffLabels', afterDatasetsDraw(chart){ const {ctx:c}=chart; c.save(); c.font='9px sans-serif'; const meta=chart.getDatasetMeta(0); raw.forEach((d,i)=>{ if(!_isFeatured(d.o)) return; const el=meta.data[i]; c.fillStyle=_orgColor(d.o); c.fillText(d.o,el.x+5,el.y-3); }); c.restore(); } }]
+  });
+}
+
+function _drawAgeIp(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const ages=[18,19,20,21,22];
+  const byAge={}; ages.forEach(a=>{byAge[a]={sn:0,sip:0};});
+  (CROSS_DATASET.org_age_all||[]).forEach(r=>{ if(byAge[r.age]){byAge[r.age].sn+=r.n; byAge[r.age].sip+=r.ip*r.n;} });
+  const vals=ages.map(a=>byAge[a].sn>0?+(byAge[a].sip/byAge[a].sn).toFixed(1):null);
+  _CD[cid] = new Chart(ctx, {
+    type:'bar',
+    data:{ labels:ages.map(a=>'Age '+a), datasets:[{ data:vals, backgroundColor:['#c4b5fd88','#818cf8aa','#60a5facc','#34d399cc','#fbbf24cc'], borderRadius:4, borderWidth:0 }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>{ const n=byAge[ages[c.dataIndex]].sn; return `${c.parsed.y} IP avg (n=${n} pitcher-seasons)`; }}} },
+      scales:{ y:{min:60,title:{display:true,text:'Avg IP',font:{size:10}},ticks:{font:{size:10}}}, x:{ticks:{font:{size:10}}} }
+    }
+  });
+}
+
+function _drawAgeResults(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const raw = CROSS_DATASET.org_young_all || [];
+  _CD[cid] = new Chart(ctx, {
+    type:'scatter',
+    data:{ datasets:[{ data:raw.map(d=>({x:d.age_vs_lvl,y:d.xprv,label:d.o})), backgroundColor:raw.map(d=>(_isFeatured(d.o)?_orgColor(d.o):'#888888')+(_isFeatured(d.o)?'cc':'44')), pointRadius:raw.map(d=>_isFeatured(d.o)?6:4), pointHoverRadius:8 }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>{ const p=c.raw; return `${p.label}: age vs lvl ${p.x>=0?'+':''}${p.x.toFixed(2)}, xRV ${p.y.toFixed(4)}`; }}} },
+      scales:{ x:{title:{display:true,text:'\u2190 younger for level  \u00b7  older for level \u2192',font:{size:10}},ticks:{font:{size:10}}}, y:{title:{display:true,text:'xPitchRV (lower = efficient)',font:{size:10}},ticks:{font:{size:10},callback:v=>v.toFixed(3)}} }
+    },
+    plugins:[{ id:'ageResLabels', afterDatasetsDraw(chart){ const {ctx:c}=chart; c.save(); c.font='9px sans-serif'; const meta=chart.getDatasetMeta(0); raw.forEach((d,i)=>{ if(!_isFeatured(d.o)) return; const el=meta.data[i]; c.fillStyle=_orgColor(d.o); c.fillText(d.o,el.x+5,el.y-3); }); c.restore(); } }]
+  });
+}
+
+function _drawOrgAgeProfile(cid, orgKey) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const lookup = orgKey.includes('/') ? orgKey.split('/')[0] : orgKey;
+  const ages=[18,19,20,21,22];
+  const raw=CROSS_DATASET.org_age_all||[];
+  const orgMap={}; ages.forEach(a=>{orgMap[a]=null;});
+  raw.filter(r=>r.o===lookup).forEach(r=>{ if(ages.includes(r.age)) orgMap[r.age]=r.ip; });
+  const popMap={}; ages.forEach(a=>{popMap[a]={sn:0,sip:0};});
+  raw.forEach(r=>{ if(popMap[r.age]){popMap[r.age].sn+=r.n; popMap[r.age].sip+=r.ip*r.n;} });
+  const orgColor = _orgColor(lookup);
+  _CD[cid] = new Chart(ctx, {
+    type:'bar',
+    data:{ labels:ages.map(a=>'Age '+a), datasets:[
+      { label:lookup, data:ages.map(a=>orgMap[a]), backgroundColor:orgColor+'cc', borderColor:orgColor, borderWidth:1.5, borderRadius:3 },
+      { label:'30-org avg', data:ages.map(a=>popMap[a].sn>0?+(popMap[a].sip/popMap[a].sn).toFixed(1):null), backgroundColor:'#88888840', borderColor:'#888888', borderWidth:1, borderRadius:3 }
+    ] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:true,labels:{font:{size:10},boxWidth:10,padding:8}}, tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y==null?'\u2014':c.parsed.y.toFixed(1)+' IP'}`}} },
+      scales:{ y:{min:60,title:{display:true,text:'Avg IP',font:{size:10}},ticks:{font:{size:10}}}, x:{ticks:{font:{size:10}}} }
+    }
+  });
+}
+
 function drawCalendar(name) {
   const p = PITCHER_DATA[name];
   const year = p.starts[0].ymd.slice(0, 4);
@@ -2245,7 +2386,13 @@ function renderCrossDataset(key) {
     ? `<div class="callout callout-info" style="font-size:12.5px;margin:8px 0 16px;border-left-color:var(--info);"><strong>Population signal:</strong> ${f.cross_finding}</div>`
     : '';
 
-  return chipsHtml + calloutHtml;
+  const keySafe = key.replace('/', '_');
+  const orgAgeRows = (CROSS_DATASET.org_age_all || []).filter(r => r.o === lookup);
+  const ageCanvasHtml = orgAgeRows.length >= 2
+    ? `<div style="margin-top:10px;"><div class="league-context-header">${lookup} \u2014 IP by age vs 30-org avg</div><div style="position:relative;height:180px;"><canvas id="org-age-chart-${keySafe}"></canvas></div></div>`
+    : '';
+
+  return chipsHtml + calloutHtml + ageCanvasHtml;
 }
 
 function renderOrg(key) {
@@ -2295,6 +2442,8 @@ function renderOrg(key) {
     ${f.strengths ? `<h3>Strengths</h3><div class="callout callout-good">${f.strengths}</div>` : ''}
     ${f.concerns ? `<h3>Concerns</h3><div class="callout callout-warn">${f.concerns}</div>` : ''}
   `;
+  const keySafe = key.replace('/', '_');
+  setTimeout(() => _drawOrgAgeProfile('org-age-chart-' + keySafe, key), 50);
 }
 
 // ============================================================================
@@ -2457,7 +2606,25 @@ function renderAges() {
     <h3>Observations across age groups</h3>
     ${conclusionsHtml}
     ${bgHtml}
+    <div style="margin-top:36px;border-top:1px solid var(--border);padding-top:24px;">
+      <h2 style="margin-top:0;">Population context — 30-org age profile (2023\u201325, 60+ IP)</h2>
+      <p class="lede" style="font-size:12.5px;">These charts pull from the full 30-org 60+ IP MiLB population analyzed separately (2023\u201325). Each org's sample spans all three seasons combined; read as directional population signal, not per-season movement. Featured orgs (colored dots) are the ones studied at per-pitcher depth on this site.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+        <div>
+          <h4 class="pop-chart-title">IP by age \u2014 population-weighted avg (all 30 orgs)</h4>
+          <div style="position:relative;height:240px;"><canvas id="age-ip-chart"></canvas></div>
+        </div>
+        <div>
+          <h4 class="pop-chart-title">Age vs level \u00d7 pitch efficiency (xPitchRV proxy, lower = better)</h4>
+          <div style="position:relative;height:240px;"><canvas id="age-results-chart"></canvas></div>
+        </div>
+      </div>
+    </div>
   `;
+  setTimeout(() => {
+    _drawAgeIp('age-ip-chart');
+    _drawAgeResults('age-results-chart');
+  }, 50);
 }
 
 // ============================================================================
