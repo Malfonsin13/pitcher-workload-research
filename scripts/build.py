@@ -1957,7 +1957,8 @@ function renderPopulationResonances() {
         </div>
         <div>
           <h4 class="pop-chart-title">Volume vs efficiency — mean IP vs pitches per IP</h4>
-          <div style="position:relative;height:310px;"><canvas id="pop-voleff-chart"></canvas></div>
+          <p style="font-size:10px;color:var(--text-tertiary);margin:0 0 4px;">Mean across all qualifying 60+ IP pitcher-seasons per org, all ages 18\u201322 combined (2023\u201325). Hover for n.</p>
+          <div style="position:relative;height:300px;"><canvas id="pop-voleff-chart"></canvas></div>
         </div>
       </div>
     </details>
@@ -2190,11 +2191,11 @@ function _drawVolEff(cid) {
   const raw = CROSS_DATASET.org_summary_all || [];
   _CD[cid] = new Chart(ctx, {
     type:'scatter',
-    data:{ datasets:[{ data: raw.map(d=>({x:d.ip,y:d.pip,label:d.o})), backgroundColor: raw.map(d=>(_isFeatured(d.o)?_orgColor(d.o):'#888888')+(_isFeatured(d.o)?'cc':'44')), pointRadius: raw.map(d=>_isFeatured(d.o)?6:4), pointHoverRadius:8 }] },
+    data:{ datasets:[{ data: raw.map(d=>({x:d.ip,y:d.pip,label:d.o,n:d.n})), backgroundColor: raw.map(d=>(_isFeatured(d.o)?_orgColor(d.o):'#888888')+(_isFeatured(d.o)?'cc':'44')), pointRadius: raw.map(d=>_isFeatured(d.o)?6:4), pointHoverRadius:8 }] },
     options:{
       responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{callbacks:{label: c=>{ const p=c.raw; return `${p.label}: ${p.x.toFixed(1)} IP · ${p.y.toFixed(2)} P/IP`; }}} },
-      scales:{ x:{title:{display:true,text:'Mean IP',font:{size:10}},ticks:{font:{size:10}}}, y:{title:{display:true,text:'P/IP',font:{size:10}},ticks:{font:{size:10}}} }
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label: c=>{ const p=c.raw; return [`${p.label}: ${p.x.toFixed(1)} IP avg \u00b7 ${p.y.toFixed(2)} P/IP`, `n=${p.n} pitcher-seasons (60+ IP, ages 18\u201322, 2023\u201325)`]; }}} },
+      scales:{ x:{title:{display:true,text:'Mean IP (all qualifying pitcher-seasons, ages 18\u201322)',font:{size:10}},ticks:{font:{size:10}}}, y:{title:{display:true,text:'P/IP',font:{size:10}},ticks:{font:{size:10}}} }
     },
     plugins:[{ id:'volEffLabels', afterDatasetsDraw(chart){ const {ctx:c}=chart; c.save(); c.font='9px sans-serif'; const meta=chart.getDatasetMeta(0); raw.forEach((d,i)=>{ if(!_isFeatured(d.o)) return; const el=meta.data[i]; c.fillStyle=_orgColor(d.o); c.fillText(d.o,el.x+5,el.y-3); }); c.restore(); } }]
   });
@@ -2258,6 +2259,85 @@ function _drawOrgAgeProfile(cid, orgKey) {
       responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:true,labels:{font:{size:10},boxWidth:10,padding:8}}, tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y==null?'\u2014':c.parsed.y.toFixed(1)+' IP'}`}} },
       scales:{ y:{min:60,title:{display:true,text:'Avg IP',font:{size:10}},ticks:{font:{size:10}}}, x:{ticks:{font:{size:10}}} }
+    }
+  });
+}
+
+// ============================================================================
+// Patterns tab charts — use existing in-memory PITCHER_DATA / SHORT_STARTS
+// ============================================================================
+
+function _drawCohortProgression(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  // Collect pitch counts by start-position across all pitchers
+  const byPos = {};
+  Object.keys(PITCHER_DATA).forEach(nm => {
+    PITCHER_DATA[nm].starts.forEach((s, i) => {
+      const pos = i + 1;
+      if (!byPos[pos]) byPos[pos] = [];
+      byPos[pos].push(s.p);
+    });
+  });
+  const positions = Object.keys(byPos).map(Number).sort((a,b)=>a-b).filter(p=>byPos[p].length>=4);
+  const _med = arr => { const s=[...arr].sort((a,b)=>a-b); return s[Math.floor(s.length/2)]; };
+  const _pct = (arr,p) => { const s=[...arr].sort((a,b)=>a-b); return s[Math.floor(s.length*p)]; };
+  const ns=positions.map(p=>byPos[p].length);
+  const meds=positions.map(p=>_med(byPos[p]));
+  const p25s=positions.map(p=>_pct(byPos[p],0.25));
+  const p75s=positions.map(p=>_pct(byPos[p],0.75));
+  _CD[cid] = new Chart(ctx, {
+    type:'line',
+    data:{ labels:positions, datasets:[
+      { label:'p75', data:p75s, borderColor:'rgba(96,165,250,0.3)', borderWidth:1, borderDash:[4,3], pointRadius:0, fill:false },
+      { label:'Median pitches', data:meds, borderColor:'#60a5fa', borderWidth:2.5, pointRadius:0, tension:0.3, fill:false },
+      { label:'p25', data:p25s, borderColor:'rgba(96,165,250,0.3)', borderWidth:1, borderDash:[4,3], pointRadius:0, fill:false }
+    ] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:true,labels:{font:{size:10},boxWidth:10,padding:8,filter:i=>i.text!=='p75'&&i.text!=='p25'}}, tooltip:{callbacks:{title:t=>`Start #${t[0].label} (n=${ns[t[0].dataIndex]} pitchers)`, label:c=>`${c.dataset.label}: ${c.parsed.y}P`}} },
+      scales:{ x:{title:{display:true,text:'Start number in season',font:{size:10}},ticks:{font:{size:10}}}, y:{min:40,max:115,title:{display:true,text:'Pitch count',font:{size:10}},ticks:{font:{size:10}}} }
+    }
+  });
+}
+
+function _drawSweetScatter(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const pts = Object.keys(META).map(nm => {
+    const m=META[nm]; const p=PITCHER_DATA[nm];
+    if(!p) return null;
+    const a=aggAcwr(p.starts); const s=stats(p.starts);
+    return {x:s.maxP, y:Math.round(a.sweetPct), label:nm, org:m.org};
+  }).filter(x=>x!==null);
+  _CD[cid] = new Chart(ctx, {
+    type:'scatter',
+    data:{ datasets:[{ data:pts, backgroundColor:pts.map(p=>(_orgColor(p.org))+'bb'), pointRadius:6, pointHoverRadius:9 }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>{ const p=c.raw; return `${p.label} (${p.org}): max ${p.x}P \u00b7 ${p.y}% in-band`; }}} },
+      scales:{ x:{title:{display:true,text:'Season-high pitch count',font:{size:10}},ticks:{font:{size:10}}}, y:{min:0,max:105,title:{display:true,text:'% starts in 0.8\u20131.3 ACWR band',font:{size:10}},ticks:{font:{size:10},callback:v=>v+'%'}} }
+    },
+    plugins:[{ id:'sweetLabels', afterDatasetsDraw(chart){ const {ctx:c}=chart; c.save(); c.font='9px sans-serif'; const meta=chart.getDatasetMeta(0); pts.forEach((d,i)=>{ const el=meta.data[i]; c.fillStyle=_orgColor(d.org); c.fillText(d.label,el.x+5,el.y-3); }); c.restore(); } }]
+  });
+}
+
+function _drawShortStartOrgs(cid) {
+  _destroyChart(cid);
+  const ctx = document.getElementById(cid);
+  if (!ctx || !window.Chart) return;
+  const S = SHORT_STARTS;
+  if (!S || !S.orgs) return;
+  const data=[...S.orgs].sort((a,b)=>b.nEvents-a.nEvents);
+  _CD[cid] = new Chart(ctx, {
+    type:'bar',
+    data:{ labels:data.map(o=>o.org), datasets:[{ data:data.map(o=>o.nEvents), backgroundColor:data.map(o=>_orgColor(o.org)+'cc'), borderRadius:3, borderWidth:0 }] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>{ const o=data[c.dataIndex]; return `${o.nEvents} events across ${o.nPitchers} pitcher${o.nPitchers>1?'s':''}`; }}} },
+      scales:{ x:{ticks:{font:{size:10}}}, y:{title:{display:true,text:'Short-start events',font:{size:10}},ticks:{font:{size:10},stepSize:1}} }
     }
   });
 }
@@ -2469,7 +2549,31 @@ function renderBest() {
       <div class="callout callout-good"><strong>Woodrow Ford (SEA 2025, 20yo)</strong><br>125 IP · 23 GS · max 89P · 100% in-band. 2022 2nd rd. Modesto (Low-A). Held 7-day rotation for 20 of 22 rest gaps. Only Low-A arm in this group — heavy innings at the lowest full-season level were possible here.</div>
       <div class="callout callout-good"><strong>Jonathan Santucci (NYM 2025, 22yo)</strong><br>122 IP · 26 GS · max 86P · 96% in-band. 2024 2nd rd. Brooklyn → Binghamton. Steady High-A → AA progression, opener to peak with no injury disruptions.</div>
     </div>
+    <div style="margin-top:36px;border-top:1px solid var(--border);padding-top:24px;">
+      <h2 style="margin-top:0;">Patterns visualized</h2>
+      <p class="lede" style="font-size:12.5px;">The three charts below put numbers on the patterns described above. Each draws from the same game-log data — no new data sources.</p>
+      <h4 class="pop-chart-title">Cohort pitch-count buildup — median + p25/p75 band by start number</h4>
+      <p style="font-size:10px;color:var(--text-tertiary);margin:0 0 4px;">All 38 pitchers pooled. Tooltip shows n pitchers contributing to each start position. Dashed lines = interquartile band; solid = median. Positions with fewer than 4 pitchers are excluded.</p>
+      <div style="position:relative;height:260px;margin-bottom:24px;"><canvas id="pattern-progression-chart"></canvas></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <h4 class="pop-chart-title">Max pitch count vs ACWR in-band % — all 38 pitchers</h4>
+          <p style="font-size:10px;color:var(--text-tertiary);margin:0 0 4px;">Each dot = one pitcher-season. High and left = conservative ceiling, rhythmic. High and right = high ceiling, still rhythmic. Low = more chaotic ACWR. Hover for name.</p>
+          <div style="position:relative;height:280px;"><canvas id="pattern-sweet-scatter"></canvas></div>
+        </div>
+        <div>
+          <h4 class="pop-chart-title">Short-start events by org</h4>
+          <p style="font-size:10px;color:var(--text-tertiary);margin:0 0 4px;">True low-workload starts (\u22644 IP AND &lt;80% of prior start's pitches). Counts are raw events, not rate-adjusted.</p>
+          <div style="position:relative;height:280px;"><canvas id="pattern-short-starts"></canvas></div>
+        </div>
+      </div>
+    </div>
   `;
+  setTimeout(() => {
+    _drawCohortProgression('pattern-progression-chart');
+    _drawSweetScatter('pattern-sweet-scatter');
+    _drawShortStartOrgs('pattern-short-starts');
+  }, 50);
 }
 
 // ============================================================================
