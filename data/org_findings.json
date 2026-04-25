@@ -157,5 +157,18 @@
     "pattern":  "First BOS entry in the dataset (Round-4 comparator). Single-pitcher sample — directional only. League-position chips above contextualize where BOS sits across the 2025 60+ IP MiLB cohort regardless of how thin our own sample is.",
     "strengths":"Adds a previously-unrepresented org to the sample.",
     "concerns": "Single pitcher; no within-org pattern can be drawn from n=1."
+  },
+
+  "STL": {
+    "pitchers": ["McGreevy", "Graceffo", "Rincon", "Hansen"],
+    "rhythm":   "6-7 day rotation rhythm across the four arms. No compressed back-to-back patterns in the data.",
+    "cap":      "Progressive caps by age and level: Rincon (Low-A debut) built up to ~95P by end of 2023 season; Hansen operates in the 80-90P range at AA; McGreevy and Graceffo reached 95-100P+ at AAA. STL is not a conservative-cap org — it trusts its development track.",
+    "buildup":  "Patient multi-year ramps are the signature. Rincon 49 IP (ROK) → 53 IP → 123 IP → 130 IP → 87 IP — a 3-year build before the first 100+ IP season. McGreevy 7 IP (draft year) → 141 IP → 150 IP → 146 IP. The org absorbs partial-year entries and doesn't rush year-one totals.",
+    "injury":   "Graceffo's 2023 was notably shortened (78 IP at AAA) after a full 136 IP 2022 breakout — likely injury-related, though STL never confirmed publicly. His 2024 comeback (124 IP) shows recovery management. Otherwise the four arms are notable for their multi-year consecutive season presence — a strong health signal.",
+    "graduation":"McGreevy reached MLB in 2025 (171 IP across majors/minors). He and Graceffo are among the most-IP arms in this dataset's MLBers list. Hansen and Rincon are on-deck at AA/AAA as of 2025-2026.",
+    "arc":      "STL's most distinctive feature is the velocity arc: Rincon gained +7.1 mph from his DSL debut (87.6 mph, 2021) to his 2025 AAA-level starts (94.7 mph). McGreevy's velo remained steady (91.3 → 93.3 mph) across five seasons — the consistency mark. Graceffo's velo dipped from 94.8 in his 2022 breakout to 92.5 in his 2024 comeback — a yellow flag worth monitoring. Hansen shows slow but steady velo gain (90.1 → 90.9 mph) across three seasons, consistent with a groundball-profile innings-eater.",
+    "strengths":"The strongest multi-season development dataset in this study. Four arms with 3-6 years of game logs, multiple of whom appear on the MLBers 200+IP list. STL's homegrown track record — not just acquiring arms, but building them from Low-A through MLB — is the clearest case-study answer to the STL exploitation hypothesis: these arms show consecutive-season presence, progressive IP, and no dramatic workload spikes in the data.",
+    "concerns": "Hence's 2025-2026 walk spike (BB% up from 8-9% in 2023-2024 to 11.5%+ in 2025) is the one active concern in the STL orbit. His 2026 partial season is too small to draw conclusions but worth tracking. Graceffo's velo dip post-injury also warrants monitoring as he enters his late-development window.",
+    "cross_finding": "MLBers 200+IP list: STL has 5 arms on the cumulative 200+IP list (McGreevy, Graceffo, and others acquired). The homegrown arms (McGreevy, Graceffo, Rincon) account for 3 of those — the development system is producing durable starters, not just acquiring them."
   }
 }

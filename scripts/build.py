@@ -3,12 +3,18 @@
 Build script for pitcher-workload-research.
 
 Reads:
-  data/csvs/*.csv           — TruMedia exports
-  data/metadata.json        — pitcher meta (org, year, age, draft, etc.)
-  data/injury_flags.json    — injury context per pitcher
-  data/weather_flags.json   — gap attribution per pitcher
-  data/org_findings.json    — per-org qualitative findings
-  data/overview_findings.json — top-level callouts, key patterns, age analysis
+  data/game_logs/featured/*.csv  — TruMedia per-game exports (featured pitchers)
+  data/metadata.json             — pitcher meta (org, year, age, draft, etc.)
+  data/injury_flags.json         — injury context per pitcher
+  data/weather_flags.json        — gap attribution per pitcher
+  data/org_findings.json         — per-org qualitative findings
+  data/overview_findings.json    — top-level callouts, key patterns, age analysis
+
+  Reference data (not loaded by build.py, used for analysis):
+  data/game_logs/multi_season/   — multi-season per-game logs (Hence, Morales, Suarez, Roby)
+  data/player_kpis/per_season/   — per-season KPI aggregates (single pitcher)
+  data/population/annual_snapshots/ — 60IP snapshots, 200+IP cumulative, MLBers
+  data/population/season_splits/ — all-MiLB +40IP split-by-season files
 
 Writes:
   docs/index.html           — standalone deliverable (embeds all data + logic)
@@ -17,7 +23,7 @@ Usage:
   python3 scripts/build.py
 
 Adding a new pitcher:
-  1. Drop TruMedia CSV export in data/csvs/
+  1. Drop TruMedia per-game CSV export in data/game_logs/featured/
   2. Add entry to data/metadata.json (keyed by surname)
   3. Optionally add injury/weather notes to the respective JSON files
   4. Run this script
@@ -32,8 +38,19 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
-CSV_DIR = DATA / "csvs"
+CSV_DIR = DATA / "game_logs" / "featured"
+MULTI_CSV_DIR = DATA / "game_logs" / "multi_season"
 OUT = ROOT / "docs" / "index.html"
+
+# Maps CSV abbrev name → canonical key matching metadata.json keys
+MULTI_SEASON_KEY_MAP = {
+    'M. McGreevy': 'McGreevy', 'G. Graceffo': 'Graceffo',
+    'H. Rincon':   'Rincon',   'P. Hansen':   'Hansen',
+    'T. Hence':    'Hence',    'M. Morales':  'Morales',
+    'S. Suarez':   'S Suarez', 'T. Roby':     'Roby',
+    'J. Jobe':     'Jobe',     'P. Messick':  'Messick',
+    'N. McLean':   'McLean',   'D. Hackenberg': 'Hackenberg',
+}
 
 
 # -----------------------------------------------------------------------------
@@ -112,11 +129,15 @@ def _safe_int(v):
     except ValueError:
         return 0
 
-def process_pitcher_csv(csv_path):
+def process_pitcher_csv(csv_path, filter_year=None, starts_only=False):
     """Read one TruMedia CSV and return structured starts list."""
     rows = []
     with open(csv_path, encoding='utf-8') as f:
         for r in csv.DictReader(f):
+            if filter_year and r.get('seasonYear') != str(filter_year):
+                continue
+            if starts_only and r.get('GS', '1') != '1':
+                continue
             gd = r['gameDay']
             date = dt.datetime.strptime(gd, '%m/%d/%y')
             rows.append({
@@ -167,16 +188,104 @@ def process_pitcher_csv(csv_path):
 pitcher_data = {}
 insufficient_history = []  # pitchers with <4 starts (no ACWR-eligible window)
 for name, m in meta.items():
-    csv_path = CSV_DIR / m['csv']
+    csv_dir = MULTI_CSV_DIR if m.get('csvDir') == 'multi_season' else CSV_DIR
+    csv_path = csv_dir / m['csv']
     if not csv_path.exists():
         print(f"WARNING: {csv_path} not found, skipping {name}", file=sys.stderr)
         continue
-    pitcher_data[name] = {'starts': process_pitcher_csv(csv_path)}
+    filter_year = m.get('yr') if m.get('csvDir') == 'multi_season' else None
+    pitcher_data[name] = {'starts': process_pitcher_csv(csv_path, filter_year=filter_year, starts_only=m.get('csvDir') == 'multi_season')}
     n_starts = len(pitcher_data[name]['starts'])
     print(f"  processed {name}: {n_starts} starts", file=sys.stderr)
     if n_starts < 4:
         insufficient_history.append(name)
         print(f"  WARNING: {name} has only {n_starts} starts — no ACWR-eligible window; excluded from org/age sweet% aggregates", file=sys.stderr)
+
+
+# -----------------------------------------------------------------------------
+# Development Arc — multi-season game log data
+# -----------------------------------------------------------------------------
+
+def load_dev_arc():
+    """Load all multi-season gamelogs; return per-arm trajectory data for Dev Arc tab."""
+    out = {}
+    for csv_file in sorted(MULTI_CSV_DIR.glob("*.csv")):
+        abbrev = csv_file.stem.split(" - ")[0]
+        key = MULTI_SEASON_KEY_MAP.get(abbrev)
+        if not key:
+            continue
+        by_yr = {}
+        org_from_csv = None
+        with open(csv_file, encoding='utf-8') as f:
+            for r in csv.DictReader(f):
+                if r.get('GS', '0') != '1':
+                    continue
+                if org_from_csv is None:
+                    org_from_csv = r.get('org') or r.get('currentOrg') or None
+                yr = r.get('seasonYear', '')
+                gd = r.get('gameDay', '')
+                try:
+                    date = dt.datetime.strptime(gd, '%m/%d/%y')
+                except ValueError:
+                    continue
+                if yr not in by_yr:
+                    by_yr[yr] = []
+                by_yr[yr].append({
+                    'date': date, 'yr': yr,
+                    'ip': float(r.get('IP') or 0),
+                    'p': _safe_int(r.get('P')),
+                    'vel': _safe_float(r.get('Vel4S')),
+                    'level': r.get('SeasonLevel') or r.get('teamLevel', ''),
+                    'team': r.get('teamWithLevel', ''),
+                    'rvP': _safe_float(r.get('xPitchRV/P')),
+                    'kPct': _safe_float(r.get('K%')),
+                })
+        if not by_yr:
+            continue
+        all_starts = []
+        season_summaries = {}
+        for yr in sorted(by_yr):
+            yr_rows = sorted(by_yr[yr], key=lambda x: x['date'])
+            prev_date = None
+            for r in yr_rows:
+                rest = (r['date'] - prev_date).days if prev_date else 0
+                all_starts.append({
+                    'd': r['date'].strftime('%m/%d'),
+                    'ymd': r['date'].strftime('%Y-%m-%d'),
+                    'yr': yr,
+                    'ip': r['ip'],
+                    'ipF': ip_to_decimal(r['ip']),
+                    'p': r['p'],
+                    'vel': r['vel'],
+                    'team': r['team'],
+                    'rest': rest,
+                    'rvP': r['rvP'],
+                    'kPct': r['kPct'],
+                })
+                prev_date = r['date']
+            vels = [r['vel'] for r in yr_rows if r['vel']]
+            ips = [ip_to_decimal(r['ip']) for r in yr_rows]
+            levels = sorted(set(r['level'] for r in yr_rows if r['level']))
+            season_summaries[yr] = {
+                'gs': len(yr_rows),
+                'ip': round(sum(ips), 1),
+                'totP': sum(r['p'] for r in yr_rows),
+                'avgP': round(sum(r['p'] for r in yr_rows) / len(yr_rows)) if yr_rows else 0,
+                'maxP': max((r['p'] for r in yr_rows), default=0),
+                'avgVel': round(sum(vels) / len(vels), 1) if vels else None,
+                'levels': levels,
+            }
+        org = (meta[key]['org'] if key in meta else None) or org_from_csv
+        out[key] = {
+            'starts': all_starts,
+            'seasons': season_summaries,
+            'org': org,
+            'abbrev': abbrev,
+        }
+    return out
+
+dev_arc_data = load_dev_arc()
+print(f"  dev arc loaded: {len(dev_arc_data)} arms", file=sys.stderr)
 
 
 # -----------------------------------------------------------------------------
@@ -1354,7 +1463,7 @@ def load_league_baseline():
       }
     Pitches-per-start denominator filters to GS >= 5 (skip mostly-relievers).
     """
-    league_dir = DATA / "csvs" / "2nd set"
+    league_dir = DATA / "population" / "annual_snapshots"
     files = {
         2023: league_dir / "2023 Pitchers 18-22 60IP.csv",
         2024: league_dir / "2024 Pitchers 18-22 60IP.csv",
@@ -1484,7 +1593,7 @@ ORG_COLOR = {
     'MIL': '#BA7517', 'SEA': '#185FA5', 'NYM': '#534AB7', 'ATL': '#A32D2D',
     'TB': '#1D9E75', 'CLE': '#D4537E', 'NYY/CHW': '#5F5E5A', 'LAD': '#378ADD',
     'MIA': '#0F766E', 'NYY': '#D0D6D9', 'CLE/WAS': '#E4572E', 'WAS': '#AB0003',
-    'DET': '#0C2340', 'BOS': '#BD3039'
+    'DET': '#0C2340', 'BOS': '#BD3039', 'STL': '#C41E3A'
 }
 
 # Inject ORG_COLOR and order into overview.
@@ -1518,6 +1627,7 @@ js_payload = {
     'LEAGUE_BASELINE': league_baseline,
     'ORG_LEAGUE_POSITION': org_league_position,
     'CROSS_DATASET': league_context_v2,
+    'DEV_ARC': dev_arc_data,
     'GENERATED': dt.datetime.now().strftime('%B %Y')
 }
 
@@ -1716,6 +1826,7 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
   <button data-tab="promotions">Promotions</button>
   <button data-tab="best">Patterns</button>
   <button data-tab="ages">Age analysis</button>
+  <button data-tab="arc">Dev Arc</button>
   <button data-tab="methodology">Methodology</button>
 </div></nav>
 <main><div class="container">
@@ -1726,6 +1837,7 @@ footer { border-top: 1px solid var(--border); padding: 24px 0; margin-top: 40px;
 <div class="tab-panel" id="tab-promotions"><div id="promotions-content"></div></div>
 <div class="tab-panel" id="tab-best"><div id="best-content"></div></div>
 <div class="tab-panel" id="tab-ages"><div id="ages-content"></div></div>
+<div class="tab-panel" id="tab-arc"><div id="arc-content"></div></div>
 <div class="tab-panel" id="tab-methodology"><div id="methodology-content"></div></div>
 </div></main>
 <footer><div class="container">Analysis compiled __GENERATED__ · Standalone HTML · Chart.js via CDN · Source data: TruMedia pitching KPIs</div></footer>
@@ -1745,9 +1857,9 @@ js_data = "const PAYLOAD = " + json.dumps(js_payload, default=str) + ";"
 
 # Load the runtime JS (separated for readability)
 app_js = r"""
-const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, TEMPERED_STARTS, SCHEDULING_RESPONSE, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR, INEFFICIENT_STARTS, BACKGROUND_STATS, ORG_AGGREGATES, VOLATILITY, EFFICIENCY, REST_INSTABILITY, VELOCITY_RESPONSE, PROMOTIONS, SENSITIVITY, LEAGUE_BASELINE, ORG_LEAGUE_POSITION, CROSS_DATASET } = PAYLOAD;
+const { PITCHER_DATA, META, INJURIES, WEATHER, ORGS, OVERVIEW, BUILD_DATA, ASB_DATA, SHORT_STARTS, TEMPERED_STARTS, SCHEDULING_RESPONSE, AGE_GROUP_STATS, INSUFFICIENT_HISTORY, ORG_COLOR, INEFFICIENT_STARTS, BACKGROUND_STATS, ORG_AGGREGATES, VOLATILITY, EFFICIENCY, REST_INSTABILITY, VELOCITY_RESPONSE, PROMOTIONS, SENSITIVITY, LEAGUE_BASELINE, ORG_LEAGUE_POSITION, CROSS_DATASET, DEV_ARC } = PAYLOAD;
 
-const FEATURED_ORGS_SET = new Set(['ATL','BOS','CLE','DET','LAD','MIA','MIL','NYM','NYY','SEA','TB']);
+const FEATURED_ORGS_SET = new Set(['ATL','BOS','CLE','DET','LAD','MIA','MIL','NYM','NYY','SEA','STL','TB']);
 const _CD = {}; // Chart registry — destroyed before re-draw to avoid "canvas already in use"
 function _destroyChart(id) { if (_CD[id]) { try { _CD[id].destroy(); } catch(e){} delete _CD[id]; } }
 function _orgColor(o) { return ORG_COLOR[o] || '#888'; }
@@ -1792,7 +1904,7 @@ function hexToRgb(hex) {
 // Tab switching + routing
 // ============================================================================
 
-const TABS = ['overview', 'pitchers', 'orgs', 'shorts', 'promotions', 'best', 'ages', 'methodology'];
+const TABS = ['overview', 'pitchers', 'orgs', 'shorts', 'promotions', 'best', 'ages', 'arc', 'methodology'];
 
 function switchTab(tab) {
   document.querySelectorAll('nav.main-nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -3006,6 +3118,147 @@ function renderShortStarts() {
 }
 
 // ============================================================================
+// Development Arc tab
+// ============================================================================
+
+const ARC_SEASON_COLORS = ['#2563eb','#dc2626','#16a34a','#9333ea','#ea580c','#0891b2','#65a30d','#b45309'];
+
+function renderDevArc() {
+  if (!DEV_ARC) return;
+  const names = Object.keys(DEV_ARC).sort((a, b) => {
+    const orgA = DEV_ARC[a].org || 'ZZZ';
+    const orgB = DEV_ARC[b].org || 'ZZZ';
+    return orgA.localeCompare(orgB) || a.localeCompare(b);
+  });
+
+  const cards = names.map(name => {
+    const arm = DEV_ARC[name];
+    const org = arm.org || '?';
+    const color = ORG_COLOR[org] || '#888';
+    const m = META[name];
+    const seasons = Object.keys(arm.seasons).sort();
+    const velArr = seasons.map(yr => arm.seasons[yr].avgVel);
+    const velFirst = velArr.find(v => v !== null);
+    const velLast = [...velArr].reverse().find(v => v !== null);
+    const velDelta = (velFirst != null && velLast != null) ? (velLast - velFirst).toFixed(1) : null;
+    const velDeltaStr = velDelta != null
+      ? `<span style="color:${parseFloat(velDelta) >= 0 ? 'var(--good)' : 'var(--danger)'};font-weight:600;">${parseFloat(velDelta) >= 0 ? '+' : ''}${velDelta} mph</span>`
+      : '';
+    const totalIP = Object.values(arm.seasons).reduce((s, v) => s + v.ip, 0).toFixed(0);
+    const totalGS = Object.values(arm.seasons).reduce((s, v) => s + v.gs, 0);
+    const pitcherLink = m
+      ? `<a href="#pitchers/${encodeURIComponent(name)}" style="color:${color};text-decoration:none;font-weight:600;">${arm.abbrev || name}</a>`
+      : `<strong style="color:${color};">${arm.abbrev || name}</strong>`;
+
+    const tableRows = [
+      ['IP',      seasons.map(yr => arm.seasons[yr].ip)],
+      ['GS',      seasons.map(yr => arm.seasons[yr].gs)],
+      ['Avg vel', seasons.map(yr => arm.seasons[yr].avgVel !== null ? arm.seasons[yr].avgVel : '—')],
+      ['Level',   seasons.map(yr => (arm.seasons[yr].levels || []).join('/')||'—')],
+    ];
+    const tableHtml = `<div class="table-wrap" style="margin-bottom:10px;"><table style="font-size:11px;">
+      <thead><tr><th>Metric</th>${seasons.map(yr => `<th>${yr}</th>`).join('')}</tr></thead>
+      <tbody>${tableRows.map(([label, vals]) =>
+        `<tr><td style="color:var(--text-muted);white-space:nowrap;">${label}</td>${vals.map(v => `<td>${v}</td>`).join('')}</tr>`
+      ).join('')}</tbody>
+    </table></div>`;
+
+    const safeId = name.replace(/\s+/g, '-');
+    return `<div class="card" style="margin-bottom:20px;padding:14px 16px;" id="arc-arm-${safeId}">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        ${pitcherLink}
+        <span class="pill" style="background:${color}22;color:${color};">${org}</span>
+        <span style="font-size:11px;color:var(--text-muted);">${totalGS} starts · ${totalIP} IP across ${seasons.length} seasons ${velDeltaStr}</span>
+      </div>
+      ${tableHtml}
+      <div style="font-size:10px;color:var(--text-tertiary);margin-bottom:4px;">Velocity per start (line = season avg) · IP per start (bars, colored by season)</div>
+      <div class="chart-wrap" style="height:130px;"><canvas id="arc-vel-${safeId}"></canvas></div>
+      <div class="chart-wrap" style="height:80px;margin-top:4px;"><canvas id="arc-ip-${safeId}"></canvas></div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('arc-content').innerHTML = `
+    <h2 style="margin-top:0;">Development Arc</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">Multi-season start-by-start trajectory for ${names.length} arms with complete game-log records spanning 2021–2026. Velocity per start colored by season; IP per start below. Arms sorted by organization.</p>
+    <div>${cards}</div>
+  `;
+
+  setTimeout(() => names.forEach(name => _drawArcCharts(name)), 60);
+}
+
+function _drawArcCharts(name) {
+  const arm = DEV_ARC[name];
+  if (!arm) return;
+  const seasons = Object.keys(arm.seasons).sort();
+  const safeId = name.replace(/\s+/g, '-');
+
+  // Velocity chart — one line dataset per season, x = start # within season
+  const velCtxEl = document.getElementById('arc-vel-' + safeId);
+  if (velCtxEl) {
+    _destroyChart('arc-vel-' + safeId);
+    const velDatasets = seasons.map((yr, i) => {
+      const pts = arm.starts
+        .filter(s => s.yr === yr)
+        .map((s, idx) => ({ x: idx + 1, y: s.vel }));
+      return {
+        label: yr,
+        data: pts,
+        borderColor: ARC_SEASON_COLORS[i % ARC_SEASON_COLORS.length],
+        backgroundColor: ARC_SEASON_COLORS[i % ARC_SEASON_COLORS.length],
+        borderWidth: 1.5, pointRadius: 2, tension: 0.25, spanGaps: true,
+      };
+    });
+    _CD['arc-vel-' + safeId] = new Chart(velCtxEl, {
+      type: 'line',
+      data: { datasets: velDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, parsing: false,
+        plugins: {
+          legend: { display: true, position: 'right', labels: { font: { size: 9 }, boxWidth: 10, padding: 3 } },
+          tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.raw.y != null ? c.raw.y + ' mph' : '—'}` } },
+        },
+        scales: {
+          x: { type: 'linear', title: { display: true, text: 'Start # in season', font: { size: 9 } }, ticks: { font: { size: 8 }, stepSize: 5 }, grid: { display: false } },
+          y: { title: { display: true, text: 'Vel4S', font: { size: 9 } }, ticks: { font: { size: 8 } }, grid: { color: 'rgba(128,128,128,0.06)' } },
+        },
+      },
+    });
+  }
+
+  // IP per start — bar, all seasons in sequence, colored by season
+  const ipCtxEl = document.getElementById('arc-ip-' + safeId);
+  if (ipCtxEl) {
+    _destroyChart('arc-ip-' + safeId);
+    const allStarts = arm.starts;
+    const ipColors = allStarts.map(s => {
+      const i = seasons.indexOf(s.yr);
+      return ARC_SEASON_COLORS[i % ARC_SEASON_COLORS.length] + 'bb';
+    });
+    _CD['arc-ip-' + safeId] = new Chart(ipCtxEl, {
+      type: 'bar',
+      data: {
+        labels: allStarts.map((_, i) => i + 1),
+        datasets: [{ data: allStarts.map(s => s.ipF), backgroundColor: ipColors, borderWidth: 0 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: {
+            title: t => `#${t[0].label} · ${allStarts[t[0].dataIndex].yr} ${allStarts[t[0].dataIndex].d}`,
+            label: c => `${c.raw} IP · ${allStarts[c.dataIndex].p}P`,
+          }},
+        },
+        scales: {
+          x: { ticks: { display: false }, grid: { display: false }, barPercentage: 0.9, categoryPercentage: 0.95 },
+          y: { min: 0, max: 9, ticks: { font: { size: 8 }, stepSize: 3 }, grid: { color: 'rgba(128,128,128,0.06)' } },
+        },
+      },
+    });
+  }
+}
+
+// ============================================================================
 // Methodology tab
 // ============================================================================
 
@@ -3102,18 +3355,25 @@ function renderMethodology() {
     <h3>Repo structure</h3>
     <div class="kpi-block"><div class="kpi-block-value" style="font-family:monospace;white-space:pre;font-size:11px;">pitcher-workload-research/
 ├── data/
-│   ├── csvs/              TruMedia exports — drop new ones here
-│   ├── metadata.json      Pitcher meta (org, yr, age, draft, background, firstFullSeason)
-│   ├── injury_flags.json  Per-pitcher injury context
-│   ├── weather_flags.json Per-pitcher gap attribution
-│   ├── org_findings.json  Per-org qualitative writeups
-│   └── overview_findings.json  Top-level patterns and callouts
+│   ├── game_logs/
+│   │   ├── featured/          Per-game CSVs for featured pitchers (build.py reads these)
+│   │   └── multi_season/      Multi-season per-game logs (Hence, Morales, Suarez, Roby)
+│   ├── player_kpis/
+│   │   └── per_season/        Per-season KPI aggregates (single pitcher, analysis only)
+│   ├── population/
+│   │   ├── annual_snapshots/  60IP by year; 200+IP; MLBers (build.py reads 60IP files)
+│   │   └── season_splits/     All-MiLB +40IP split-by-season files
+│   ├── metadata.json          Pitcher meta (org, yr, age, draft, background, firstFullSeason)
+│   ├── injury_flags.json      Per-pitcher injury context
+│   ├── weather_flags.json     Per-pitcher gap attribution
+│   ├── org_findings.json      Per-org qualitative writeups
+│   └── overview_findings.json Top-level patterns and callouts
 ├── scripts/
-│   └── build.py           Regenerates docs/index.html
+│   └── build.py               Regenerates docs/index.html
 ├── docs/
-│   └── index.html         The deliverable (GitHub Pages)
+│   └── index.html             The deliverable (GitHub Pages)
 └── README.md</div></div>
-    <p>To add a pitcher: drop CSV in data/csvs/, add entry to metadata.json (set <code>firstFullSeason</code> and <code>background</code>), optionally add injury/weather notes, run scripts/build.py, commit &amp; push.</p>
+    <p>To add a pitcher: drop per-game CSV in data/game_logs/featured/, add entry to metadata.json (set <code>firstFullSeason</code> and <code>background</code>), optionally add injury/weather notes, run scripts/build.py, commit &amp; push.</p>
   `;
 }
 
@@ -3128,6 +3388,7 @@ renderShortStarts();
 renderPromotions();
 renderBest();
 renderAges();
+renderDevArc();
 renderMethodology();
 
 if (location.hash) handleHash();
@@ -3138,6 +3399,9 @@ document.querySelector('nav.main-nav button[data-tab="pitchers"]').addEventListe
 });
 document.querySelector('nav.main-nav button[data-tab="orgs"]').addEventListener('click', () => {
   if (!location.hash.includes('/')) location.hash = 'orgs/ATL';
+});
+document.querySelector('nav.main-nav button[data-tab="arc"]').addEventListener('click', () => {
+  if (!location.hash.startsWith('#arc')) location.hash = 'arc';
 });
 """
 
