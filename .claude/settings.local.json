@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/build.py)",
+      "Bash(python -c ' *)",
+      "mcp__Claude_in_Chrome__navigate",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "mcp__Claude_in_Chrome__javascript_tool",
+      "Bash(gh run *)",
+      "Bash(mkdir -p 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/featured')",
+      "Bash(mkdir -p 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season')",
+      "Bash(mkdir -p 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/annual_snapshots')",
+      "Bash(mkdir -p 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/season_splits')",
+      "Bash(mkdir -p 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/player_kpis/per_season')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/Gamelogs/T. Hence - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/Gamelogs/M. Morales - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/Gamelogs/S. Suarez - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/Gamelogs/T. Roby - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/')",
+      "Bash(rmdir 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/Gamelogs')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/2nd set/2023 Pitchers 18-22 60IP.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/annual_snapshots/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/2nd set/2024 Pitchers 18-22 60IP.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/annual_snapshots/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/2nd set/2025 Pitchers 18-22 60IP.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/annual_snapshots/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/2nd set/Pitchers with 200+IP 2022-2025.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/annual_snapshots/')",
+      "Bash(mv 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/2nd set/Current MLBers with 200+IP in Minor Leagues.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/population/annual_snapshots/')",
+      "Read(//c/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs/**)",
+      "Read(//c/Users/malfo/Documents/Code/Workload Analysis MiLB/data/**)",
+      "Bash(rmdir 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/csvs')",
+      "Read(//c/Users/malfo/Documents/Code/Workload Analysis MiLB/**)",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/G. Graceffo - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/H. Rincon - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/M. McGreevy - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/P. Hansen - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/D. Hackenberg - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/J. Jobe - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/N. McLean - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')",
+      "Bash(cp 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/data/game_logs/multi_season/P. Messick - Pitching KPIs.csv' 'C:/Users/malfo/Documents/Code/Workload Analysis MiLB/.claude/worktrees/magical-goldberg-4cf585/data/game_logs/multi_season/')"
+    ]
+  }
+}

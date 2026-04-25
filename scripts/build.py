@@ -2545,7 +2545,15 @@ function renderCrossDataset(key) {
   const lookup = key.includes('/') ? key.split('/')[0] : key;
   const cd = CROSS_DATASET && CROSS_DATASET.by_org && CROSS_DATASET.by_org[lookup];
   const f = ORGS[key];
-  if (!cd && !(f && f.cross_finding)) return '';
+
+  // Age chart — always render when population data exists, regardless of chip/callout availability
+  const keySafe = key.replace('/', '_');
+  const orgAgeRows = (CROSS_DATASET.org_age_all || []).filter(r => r.o === lookup);
+  const ageCanvasHtml = orgAgeRows.length >= 2
+    ? `<div style="margin-top:10px;"><div class="league-context-header">${lookup} \u2014 IP by age vs 30-org avg</div><div style="position:relative;height:180px;"><canvas id="org-age-chart-${keySafe}"></canvas></div></div>`
+    : '';
+
+  if (!cd && !(f && f.cross_finding)) return ageCanvasHtml;
 
   const ord = (n) => { const j = n%10, j100 = n%100; if (j===1&&j100!==11) return n+'st'; if (j===2&&j100!==12) return n+'nd'; if (j===3&&j100!==13) return n+'rd'; return n+'th'; };
   let chipsHtml = '';
@@ -2576,12 +2584,6 @@ function renderCrossDataset(key) {
 
   const calloutHtml = (f && f.cross_finding)
     ? `<div class="callout callout-info" style="font-size:12.5px;margin:8px 0 16px;border-left-color:var(--info);"><strong>Population signal:</strong> ${f.cross_finding}</div>`
-    : '';
-
-  const keySafe = key.replace('/', '_');
-  const orgAgeRows = (CROSS_DATASET.org_age_all || []).filter(r => r.o === lookup);
-  const ageCanvasHtml = orgAgeRows.length >= 2
-    ? `<div style="margin-top:10px;"><div class="league-context-header">${lookup} \u2014 IP by age vs 30-org avg</div><div style="position:relative;height:180px;"><canvas id="org-age-chart-${keySafe}"></canvas></div></div>`
     : '';
 
   return chipsHtml + calloutHtml + ageCanvasHtml;
@@ -2982,6 +2984,17 @@ function renderShortStarts() {
       <div class="stat"><div class="stat-label">Skipped-turn heuristic*</div><div class="stat-value">${S.totalSkipped}</div></div>
     </div>
 
+    <div class="three-col" style="gap:12px;margin:18px 0 24px;">
+      <div class="card" style="padding:12px;grid-column:span 2;">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">NEXT-START REFRAME % BY ORG &nbsp;<span style="font-weight:400;">(median · lower = more tempered)</span></div>
+        <div class="chart-wrap" style="height:160px;"><canvas id="shorts-org-bar"></canvas></div>
+      </div>
+      <div class="card" style="padding:12px;">
+        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">REFRAME DISTRIBUTION &nbsp;<span style="font-weight:400;">(all events)</span></div>
+        <div class="chart-wrap" style="height:160px;"><canvas id="shorts-dist"></canvas></div>
+      </div>
+    </div>
+
     <h3>Per-org summary (sorted by median reframe %, ascending)</h3>
     <p class="lede" style="font-size:12px;">Lower median reframe = more tempered re-entry. "Coverage" = pitchers with ≥1 short start / total pitchers sampled from that org. Skipped-turn heuristic = next start's rest ≥ 10 days; most orgs normal-rest 5&ndash;8 days so ≥10d implies a skipped rotation slot. End-of-season = the short start was the last outing of the season (no next-start to analyze).</p>
     <div class="table-wrap"><table>
@@ -3115,6 +3128,73 @@ function renderShortStarts() {
     <p class="lede" style="font-size:11px;color:var(--text-tertiary);margin-top:12px;">Fastball velocity uses the CSV's <code>Vel4S</code> column; Strike% is the <code>Strike%</code> column. "Rebound" compares next-start velo/strike to the flagged start's values (positive = improvement). End-of-season events are shown but excluded from the added-rest pct calculation-by-definition since there's no next rest.</p>
     ` : `<p class="lede" style="font-style:italic;">No qualifying regression events detected with current thresholds.</p>`}
   `;
+
+  setTimeout(() => {
+    // Org reframe bar chart
+    const orgBarCtx = document.getElementById('shorts-org-bar');
+    if (orgBarCtx && S.orgs) {
+      _destroyChart('shorts-org-bar');
+      const orgsFiltered = S.orgs.filter(o => o.medianReframe !== null);
+      const bgColors = orgsFiltered.map(o => (ORG_COLOR[o.org] || '#888') + 'cc');
+      _CD['shorts-org-bar'] = new Chart(orgBarCtx, {
+        type: 'bar',
+        data: {
+          labels: orgsFiltered.map(o => o.org),
+          datasets: [{
+            data: orgsFiltered.map(o => o.medianReframe),
+            backgroundColor: bgColors,
+            borderWidth: 0,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: c => `Median reframe: ${c.raw}%` } },
+            annotation: undefined,
+          },
+          scales: {
+            x: {
+              min: 0, max: 140,
+              ticks: { font: { size: 9 }, callback: v => v + '%' },
+              grid: { color: 'rgba(128,128,128,0.07)' },
+              afterDataLimits: scale => { scale.max = 140; },
+            },
+            y: { ticks: { font: { size: 9 } }, grid: { display: false } },
+          },
+        },
+      });
+    }
+
+    // Reframe distribution histogram
+    const distCtx = document.getElementById('shorts-dist');
+    if (distCtx && S.events) {
+      _destroyChart('shorts-dist');
+      const vals = S.events.filter(e => e.nextPctPrev !== null && !e.endOfSeason).map(e => e.nextPctPrev);
+      const buckets = [0,20,40,60,80,100,120,140,160];
+      const counts = buckets.slice(0,-1).map((lo, i) => vals.filter(v => v >= lo && v < buckets[i+1]).length);
+      const bucketLabels = buckets.slice(0,-1).map((lo, i) => `${lo}–${buckets[i+1]-1}%`);
+      const bucketColors = buckets.slice(0,-1).map(lo => lo < 80 ? '#16a34acc' : lo < 100 ? '#0891b2cc' : lo < 120 ? '#b45309cc' : '#dc2626cc');
+      _CD['shorts-dist'] = new Chart(distCtx, {
+        type: 'bar',
+        data: {
+          labels: bucketLabels,
+          datasets: [{ data: counts, backgroundColor: bucketColors, borderWidth: 0 }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: c => `${c.raw} event${c.raw !== 1 ? 's' : ''}` } },
+          },
+          scales: {
+            x: { ticks: { font: { size: 8 }, maxRotation: 30 }, grid: { display: false } },
+            y: { ticks: { font: { size: 9 }, stepSize: 2 }, grid: { color: 'rgba(128,128,128,0.07)' } },
+          },
+        },
+      });
+    }
+  }, 60);
 }
 
 // ============================================================================

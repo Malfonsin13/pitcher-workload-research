@@ -10,7 +10,8 @@
     "injury":   "Meccage's 9/3 return was 14P / 1 IP after a 33-day absence — consistent with a limited first-outing-back pattern, though the CSV alone can't confirm this was a formal org protocol vs. an ad-hoc call.",
     "risk":     "Knoth's TJ (January 2025) had NO pitch count warning signs visible in the 2024 data. His ACWR never spiked above 1.25, pitch count range was 53-85P all year, and his final 5 starts showed no decline. This is a critical caveat for workload-based injury models — mechanical/tissue-level issues can be invisible in counting stats.",
     "strengths":"Disciplined rest cycles, caps scaled to individual player profile, measured return-to-play pattern observed (Meccage 9/3 return). Round-4 expansion (Corniel, M Rodriguez, Torres) gives MIL the deepest sample in the dataset (n=6) — see the per-pitcher table for individual profiles.",
-    "concerns": "No pre-injury detection mechanism visible in volume data. Birchard's chronic workload shows signs of running hot in the middle of the year."
+    "concerns": "No pre-injury detection mechanism visible in volume data. Birchard's chronic workload shows signs of running hot in the middle of the year.",
+    "cross_finding": "30-org population (n=38 pitchers, largest org cohort in this study): MIL's same-org return rate is 35% (6 of 17) — slightly below the 40%+ tier. Avg IP per arm 88.3, broadly consistent with our per-pitcher sample. Most striking finding: MIL deploys arms significantly younger than their level context (age-vs-level score: -0.53, one of the most aggressive in the 30-org study), yet the arms still produce positive xPitchRV/P — young-for-level, still effective. IP by age peaks at 22 (94.1 avg), suggesting MIL is willing to push volume with experienced-enough arms."
   },
 
   "SEA": {
@@ -73,7 +74,8 @@
     "injury":   "Neither pitcher had reported injury disruptions in these seasons.",
     "exemplar": "Parker Messick's 2024 is the 'covers innings cleanly' exemplar. 28 GS, 138.3 IP, max 97P, 80% ACWR sweet spot (slightly dragged down by his two short outings in late July/early August but otherwise textbook). Promoted Lake County → Akron on 6/22/24. Eastern League All-Star. 2025 at AAA. MLB debut April 2026 with a near-no-hitter in his 11th start. Path: 2022 draft → 2023 Low-A → 2024 full HA/AA → 2025 AAA → 2026 MLB. Three full 121+ IP seasons before debut.",
     "strengths":"Two pitchers at opposite ends of the developmental spectrum, both well-managed. Messick is the workhorse model; Doughty is the tight-leash prep model. Round-4 added Humphries (2024 High-A) and Hernandez (2025 High-A) as comparators.",
-    "concerns": "Doughty only cleared 70P in 5 of 22 outings, didn't break 72P until start #10. The 'tight leash' protects short-term but potentially under-builds volume capacity."
+    "concerns": "Doughty only cleared 70P in 5 of 22 outings, didn't break 72P until start #10. The 'tight leash' protects short-term but potentially under-builds volume capacity.",
+    "cross_finding": "30-org population (n=25 pitchers): CLE's same-org return rate is 44% (4 of 9) — above average, consistent with Messick's own clean health track. Avg IP 96.1 — highest in the 30-org study for featured orgs, validating the 'workhorse' read. Standout age-IP: CLE age-21 arms average 111 IP (highest single-age bucket in any featured org), suggesting the system deliberately ramps volume hard in the 21-year-old window. P/IP 16.36 — mid-tier efficiency. The population picture reinforces what we see per-pitcher: CLE builds innings-eaters, not pitch-counters."
   },
 
   "CLE/WAS": {
@@ -119,7 +121,8 @@
     "short":    "Patick is the outlier example — his 4/26 outing of 0.1 IP / 26P was followed by a normal 51P next time (pre-short pattern). LAD does not appear to temper pitch counts after a short outing in this 2-pitcher sample.",
     "injury":   "Zazueta was named 2025 Dodgers MiLPOY after a Rancho season capped at ~70 IP total — his workload was held to a tight cap throughout. A 14-day gap in 2024 mid-season is consistent with planned tempering, though the CSV alone can't confirm org intent. Patick: no reported injury but late-season average P declined, consistent with a planned wind-down.",
     "strengths":"Workload discipline is strict within the originally-analyzed sample. Zazueta was named 2025 Dodgers MiLPOY after Rancho season with ~70 IP total — they're willing to hold back even productive arms. Clean ACWR profiles for both (81-86% sweet).",
-    "concerns": "The 75P ceiling could be under-building volume capacity if LAD holds this line at High-A and above. Ferris was added as a Round-4 comparator at High-A → AA — see his row for a higher-level data point."
+    "concerns": "The 75P ceiling could be under-building volume capacity if LAD holds this line at High-A and above. Ferris was added as a Round-4 comparator at High-A → AA — see his row for a higher-level data point.",
+    "cross_finding": "30-org population (n=27 pitchers): LAD's same-org return rate is 42% (5 of 12) — solid, consistent with their conservative management per-pitcher. Age-21 arms average 100.1 IP — above league avg, showing LAD does ramp volume when arms are ready. P/IP 16.63 is slightly above the median (less efficient per-pitch, more runs on volume). Age-vs-level: -0.22 (marginally young for level, suggesting LAD advances arms slightly before their age-peers). The population picture tempers the 'strict cap' read: LAD pitchers accumulate innings — they're just managed conservatively within individual seasons."
   },
 
   "MIA": {
